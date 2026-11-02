@@ -4,7 +4,7 @@ All notable changes to MicVST are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 project follows [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.2.0] - 2026-11-02
 
 ### Added
 - Global hotkeys to toggle individual plugins. Click the hotkey field in a plugin row and

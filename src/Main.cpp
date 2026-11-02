@@ -58,7 +58,7 @@ class MicVSTApplication : public juce::JUCEApplication
 {
 public:
     const juce::String getApplicationName() override    { return "MicVST"; }
-    const juce::String getApplicationVersion() override { return "1.1.1"; }
+    const juce::String getApplicationVersion() override { return "1.2.0"; }
 
     // Kind-Scanprozesse (--scan) laufen parallel zur Haupt-Instanz und dürfen nicht
     // von der Single-Instance-Logik weggefangen werden.
