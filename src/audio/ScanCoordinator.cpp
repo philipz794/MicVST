@@ -1,9 +1,78 @@
 #include "audio/ScanCoordinator.h"
 
+// Gefundene Typen auf den Pfad umschlüsseln, den WIR gescannt haben. Nötig, weil JUCE für
+// Bundle-ORDNER ohne moduleinfo.json die INNERE Binary als fileOrIdentifier zurückgibt
+// (getLibraryPaths -> recursiveFileSearch steigt ins Bundle hinab), MicVST den Cache aber
+// über den gescannten Pfad befragt: list.getTypeForFile(bundle) fände dann nie etwas und
+// filterFilesNeedingScan würde die Datei bei JEDEM Start wieder als "neu" einreihen --
+// ein Dauer-Rescan, den kein mtime-Vergleich beheben kann. Zum Laden ist der Ordnerpfad
+// gleichwertig: JUCE löst ihn erneut auf und matcht die Klasse über name + uniqueId.
+static void rekeyToScannedPath (juce::Array<juce::PluginDescription>& descs,
+                                const juce::String& scannedFile)
+{
+    for (auto& d : descs)
+        d.fileOrIdentifier = scannedFile;
+}
+
+// Ergebnis EINER Datei in ein Teilergebnis einsortieren. Nimmt r per Referenz, weil der
+// ok-Zweig den Status bei unbrauchbarem XML auf failed herunterstuft.
+static ScanOutcome classifyScanResult (const juce::String& file, ScanProcessResult& r)
+{
+    ScanOutcome d;
+
+    if (r.status == ScanProcessResult::Status::ok)
+    {
+        juce::Array<juce::PluginDescription> descs;
+        if (parseScanResultXml (r.resultXmlText, descs))
+        {
+            rekeyToScannedPath (descs, file);
+            d.found.addArray (descs);
+            return d;
+        }
+        r.status = ScanProcessResult::Status::failed;   // ok ohne brauchbares XML = failed
+    }
+
+    // Crash-Rescue: gilt sowohl für "partial" (planmäßig, Exit 3 mit geretteter XML) als
+    // auch für "failed" mit vorhandener resultXmlText -- der Kindprozess kann NACH dem
+    // Schreiben der Ergebnisdatei ein zweites Mal crashen (z. B. eine zweite SEH-Exception
+    // beim DLL-Teardown in DLL_PROCESS_DETACH); der Exit-Code ist dann ein NTSTATUS statt 3,
+    // obwohl das Ergebnis vollständig auf der Platte steht. Eine Rettung gilt als gültig,
+    // wenn entweder Kinder geparst wurden ODER die Root ein crashCode-Attribut trägt
+    // (gültige, aber leere Rettung); bei kaputtem/fremdem XML fällt der Code unten in die
+    // normale "failed"-Behandlung durch.
+    if ((r.status == ScanProcessResult::Status::partial
+         || r.status == ScanProcessResult::Status::failed) && r.resultXmlText.isNotEmpty())
+    {
+        juce::Array<juce::PluginDescription> descs;
+        juce::String crashCode;
+        const bool parsedOk = parseScanResultXml (r.resultXmlText, descs, &crashCode);
+        if (parsedOk || crashCode.isNotEmpty())
+        {
+            rekeyToScannedPath (descs, file);
+            d.found.addArray (descs);
+            d.skipped.add ({ file,
+                             "crashed (" + juce::String (descs.size()) + " plugin(s) rescued"
+                                 + (crashCode.isNotEmpty() ? ", " + crashCode : juce::String()) + ")",
+                             effectiveModTime (juce::File (file)).toMilliseconds() });
+            return d;
+        }
+    }
+
+    // Eigene Exit-Codes (0/1/2/3) sind kein Crash; alles darüber ist ein NTSTATUS.
+    const auto reason = r.status == ScanProcessResult::Status::timeout       ? juce::String ("unresponsive")
+                      : r.status == ScanProcessResult::Status::skippedByUser ? juce::String ("skipped")
+                      : r.exitCode > 3
+                          ? "failed (exit 0x" + juce::String::toHexString ((int) r.exitCode).toUpperCase() + ")"
+                          : juce::String ("failed");
+    d.skipped.add ({ file, reason, effectiveModTime (juce::File (file)).toMilliseconds() });
+    return d;
+}
+
 ScanOutcome runScan (const juce::StringArray& files, ScanProcessRunner& runner, int timeoutMs,
                      std::function<void (int, int, const juce::String&)> progress,
                      std::function<bool()> shouldExit,
-                     std::atomic<bool>* skipRequest)
+                     std::atomic<bool>* skipRequest,
+                     std::function<void (const ScanOutcome&)> onFileDone)
 {
     ScanOutcome out;
     const int total = files.size();
@@ -23,53 +92,16 @@ ScanOutcome runScan (const juce::StringArray& files, ScanProcessRunner& runner, 
                              shouldExit ? shouldExit : [] { return false; },
                              [skipRequest] { return skipRequest != nullptr && skipRequest->load(); });
 
+        // Abbruch: die Datei hat KEIN verwertbares Ergebnis, also auch kein Teilergebnis
+        // melden -- sie darf beim nächsten Start einfach erneut dran sein.
         if (r.status == ScanProcessResult::Status::aborted)
             return out;
 
-        if (r.status == ScanProcessResult::Status::ok)
-        {
-            juce::Array<juce::PluginDescription> descs;
-            if (parseScanResultXml (r.resultXmlText, descs))
-            {
-                out.found.addArray (descs);
-                continue;
-            }
-            r.status = ScanProcessResult::Status::failed;   // ok ohne brauchbares XML = failed
-        }
-
-        // Crash-Rescue: gilt sowohl für "partial" (planmäßig, Exit 3 mit geretteter XML) als
-        // auch für "failed" mit vorhandener resultXmlText -- der Kindprozess kann NACH dem
-        // Schreiben der Ergebnisdatei ein zweites Mal crashen (z. B. eine zweite SEH-Exception
-        // beim DLL-Teardown in DLL_PROCESS_DETACH); der Exit-Code ist dann ein NTSTATUS statt 3,
-        // obwohl das Ergebnis vollständig auf der Platte steht. Eine Rettung gilt als gültig,
-        // wenn entweder Kinder geparst wurden ODER die Root ein crashCode-Attribut trägt
-        // (gültige, aber leere Rettung); bei kaputtem/fremdem XML fällt der Code unten in die
-        // normale "failed"-Behandlung durch.
-        if ((r.status == ScanProcessResult::Status::partial
-             || r.status == ScanProcessResult::Status::failed) && r.resultXmlText.isNotEmpty())
-        {
-            juce::Array<juce::PluginDescription> descs;
-            juce::String crashCode;
-            const bool parsedOk = parseScanResultXml (r.resultXmlText, descs, &crashCode);
-            if (parsedOk || crashCode.isNotEmpty())
-            {
-                out.found.addArray (descs);
-                out.skipped.add ({ file,
-                                   "crashed (" + juce::String (descs.size()) + " plugin(s) rescued"
-                                       + (crashCode.isNotEmpty() ? ", " + crashCode : juce::String()) + ")",
-                                   effectiveModTime (juce::File (file)).toMilliseconds() });
-                continue;
-            }
-        }
-
-        // Eigene Exit-Codes (0/1/2/3) sind kein Crash; alles darüber ist ein NTSTATUS.
-        const auto reason = r.status == ScanProcessResult::Status::timeout       ? juce::String ("unresponsive")
-                          : r.status == ScanProcessResult::Status::skippedByUser ? juce::String ("skipped")
-                          : r.exitCode > 3
-                              ? "failed (exit 0x" + juce::String::toHexString ((int) r.exitCode).toUpperCase() + ")"
-                              : juce::String ("failed");
-        out.skipped.add ({ file, reason,
-                           effectiveModTime (juce::File (file)).toMilliseconds() });
+        const auto delta = classifyScanResult (file, r);
+        out.found.addArray (delta.found);
+        out.skipped.addArray (delta.skipped);
+        if (onFileDone)
+            onFileDone (delta);
     }
 
     out.completed = true;
@@ -119,12 +151,14 @@ juce::StringArray filterFilesNeedingScan (const juce::StringArray& allFiles,
     juce::StringArray out;
     for (auto& f : allFiles)
     {
-        if (isSkipped (f))
-            continue;
-        // Crash-Rescue: mergeScanResults stempelt gerettete Typen SOFORT mit ihrer aktuellen
-        // effectiveModTime, der Cache-Eintrag sieht danach also aktuell aus, obwohl die Datei
-        // noch skip-gelistet war und erneut versucht werden muss -> Cache-Check hier umgehen.
+        // Erzwungene Dateien ("Retry skipped plugins") übergehen beide Filter: den
+        // Skip-Filter, weil sie ja genau deswegen dran sind, und den Cache-Check, weil
+        // mergeScanResults gerettete Typen SOFORT mit ihrer aktuellen effectiveModTime
+        // stempelt -- der Cache-Eintrag sieht danach aktuell aus, obwohl die Datei nach
+        // einem Crash-Rescue erneut versucht werden muss.
         const bool forced = forceRescan.contains (f);
+        if (! forced && isSkipped (f))
+            continue;
         if (! forced && list.isListingUpToDate (f, format))
             continue;
         // Grund + Zeitstempel loggen: macht den Dauer-Rescan-Fall in log.txt remote
@@ -155,6 +189,47 @@ void mergeScanResults (juce::KnownPluginList& list, const ScanOutcome& outcome)
         d.lastFileModTime = effectiveModTime (juce::File (d.fileOrIdentifier));
         list.addType (d);
     }
+}
+
+void applySkipDelta (juce::Array<SkippedPlugin>& skipped, const ScanOutcome& delta)
+{
+    juce::StringArray touched;
+    for (auto& d : delta.found)   touched.addIfNotAlreadyThere (d.fileOrIdentifier);
+    for (auto& s : delta.skipped) touched.addIfNotAlreadyThere (s.file);
+
+    for (int i = skipped.size(); --i >= 0;)
+        if (touched.contains (skipped[i].file))
+            skipped.remove (i);
+
+    skipped.addArray (delta.skipped);
+}
+
+std::unique_ptr<juce::PluginDescription> findTypeForEntry (const juce::KnownPluginList& list,
+                                                           const juce::String& fileOrId,
+                                                           int uniqueId)
+{
+    std::unique_ptr<juce::PluginDescription> firstForFile;
+
+    for (auto& t : list.getTypes())   // Kopie; daher wird hier kopiert, nicht gezeigt
+    {
+        if (t.fileOrIdentifier != fileOrId)
+            continue;
+        if (uniqueId != 0 && t.uniqueId == uniqueId)
+            return std::make_unique<juce::PluginDescription> (t);
+        if (firstForFile == nullptr)
+            firstForFile = std::make_unique<juce::PluginDescription> (t);
+    }
+    return firstForFile;
+}
+
+bool chainIsResolvable (const juce::Array<PluginEntryState>& plugins,
+                        const juce::KnownPluginList& list)
+{
+    for (auto& p : plugins)
+        if (! p.fileOrId.startsWith ("builtin:")
+            && findTypeForEntry (list, p.fileOrId, p.uniqueId) == nullptr)
+            return false;
+    return true;
 }
 
 bool pathIsInsideAnyFolder (const juce::String& path, const juce::StringArray& folders)
@@ -232,12 +307,14 @@ namespace
 
 ScanCoordinator::ScanCoordinator (juce::StringArray filesToScan,
                                   std::function<void (int, int, juce::String)> onProgress,
-                                  std::function<void (ScanOutcome)> onFinished,
+                                  std::function<void (ScanOutcome)> onFileScanned,
+                                  std::function<void()> onFinished,
                                   int timeoutMsIn,
                                   std::unique_ptr<ScanProcessRunner> runnerOverride)
     : juce::Thread ("PluginScan"),
       files (std::move (filesToScan)),
       progressCb (std::move (onProgress)),
+      fileScannedCb (std::move (onFileScanned)),
       finishedCb (std::move (onFinished)),
       timeoutMs (timeoutMsIn),
       runner (runnerOverride != nullptr ? std::move (runnerOverride)
@@ -264,9 +341,17 @@ void ScanCoordinator::run()
                 juce::MessageManager::callAsync ([alive = alive, cb = progressCb, cur, total, name]
                                                  { if (*alive) cb (cur, total, name); });
         },
-        [this] { return threadShouldExit(); }, &skipRequest);
+        [this] { return threadShouldExit(); }, &skipRequest,
+        [this] (const ScanOutcome& delta)
+        {
+            if (fileScannedCb)
+                juce::MessageManager::callAsync ([alive = alive, cb = fileScannedCb, delta]
+                                                 { if (*alive) cb (delta); });
+        });
 
+    // Die Nutzdaten sind über fileScannedCb längst draußen; dieser Callback meldet nur
+    // noch "komplett durchgelaufen" und kommt dank FIFO-Reihenfolge des Message-Threads
+    // garantiert NACH allen Teilergebnissen an.
     if (outcome.completed && finishedCb)
-        juce::MessageManager::callAsync ([alive = alive, cb = finishedCb, outcome]
-                                         { if (*alive) cb (outcome); });
+        juce::MessageManager::callAsync ([alive = alive, cb = finishedCb] { if (*alive) cb(); });
 }

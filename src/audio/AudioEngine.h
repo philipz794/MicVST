@@ -72,6 +72,10 @@ public:
     const juce::Array<SkippedPlugin>& getSkippedPlugins() const { return skippedPlugins; }
     std::function<void (int, int, juce::String)> onScanProgress;   // current(1-based), total, name
     std::function<void()> onScanFinished;      // nach Cache-Save + ggf. Ketten-Restore
+    // Ein zurückgestellter Ketten-Restore ist MITTEN im Scan gelaufen (alle Plugins der
+    // Kette sind da, das Scan-Ende steht aber noch aus) -> die UI muss ihre Zeilen neu
+    // aufbauen, ohne dass der Scan-Status sich ändert.
+    std::function<void()> onChainRestored;
 
     void addPluginFolder (const juce::String& folder);
     void removePluginFolder (const juce::String& folder);
@@ -138,6 +142,8 @@ private:
     juce::StringArray scanRoots() const;           // JUCE-Default-VST3-Orte + Custom-Ordner
     juce::StringArray listVst3Files() const;       // Standard- + Custom-Ordner enumerieren
     void restoreChain (const juce::Array<PluginEntryState>& plugins);
-    void handleScanFinished (const ScanOutcome&);
+    void applyScanDelta (const ScanOutcome& delta);   // Ergebnis EINER Datei übernehmen + speichern
+    void tryRestorePendingChain();                    // Restore sobald alle Ketten-Plugins da sind
+    void handleScanFinished();                        // nur noch Prune/Restore, Daten sind schon drin
     void pruneOutsideFolders();                    // Cache-Einträge entfernter Ordner löschen
 };

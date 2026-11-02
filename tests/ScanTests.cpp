@@ -2,6 +2,7 @@
 #include <map>
 #include "state/PluginScanCache.h"
 #include "audio/ScanCoordinator.h"
+#include "audio/Vst3ClassScan.h"
 
 // Hilfsfunktion: eine plausible PluginDescription bauen (kein echtes Plugin nötig).
 static juce::PluginDescription makeDesc (const juce::String& name, const juce::String& file)
@@ -245,6 +246,128 @@ struct RunScanTest : juce::UnitTest
             expectEquals (out.skipped.size(), 1);
             expectEquals (out.skipped[0].reason, juce::String ("failed"));
         }
+
+        beginTest ("found descriptions are re-keyed to the scanned path");
+        {
+            // JUCE liefert für Bundle-ORDNER OHNE moduleinfo.json die INNERE Binary als
+            // fileOrIdentifier (getLibraryPaths -> recursiveFileSearch steigt ins Bundle).
+            // MicVST sucht im Cache aber nach dem gescannten Pfad -> getTypeForFile fände
+            // nie etwas und die Datei würde bei JEDEM Start erneut gescannt. Verifiziert
+            // mit einem echten Bundle (rnnoise ohne moduleinfo.json).
+            FakeRunner r;
+            const juce::String scanned  = "C:/v/Bundly.vst3";
+            const juce::String innerDll = "C:/v/Bundly.vst3/Contents/x86_64-win/Bundly.vst3";
+            r.results[scanned] = { ScanProcessResult::Status::ok,
+                                   scanResultXmlFor (makeDesc ("Bundly", innerDll)) };
+
+            auto out = runScan ({ scanned }, r, 1000, {}, [] { return false; });
+            expectEquals (out.found.size(), 1);
+            expectEquals (out.found[0].fileOrIdentifier, scanned);
+        }
+
+        beginTest ("crash-rescued descriptions are re-keyed to the scanned path too");
+        {
+            FakeRunner r;
+            const juce::String scanned = "C:/v/Shelly.vst3";
+            juce::XmlElement root ("MicVSTScanResult");
+            root.setAttribute ("crashCode", "0xC0000005");
+            root.addChildElement (makeDesc ("S1", "C:/v/Shelly.vst3/Contents/x86_64-win/S.vst3")
+                                      .createXml().release());
+            ScanProcessResult pr;
+            pr.status = ScanProcessResult::Status::partial;
+            pr.resultXmlText = root.toString();
+            pr.exitCode = 3;
+            r.results[scanned] = pr;
+
+            auto out = runScan ({ scanned }, r, 1000, {}, [] { return false; });
+            expectEquals (out.found.size(), 1);
+            expectEquals (out.found[0].fileOrIdentifier, scanned);
+            expectEquals (out.skipped[0].file, scanned);
+        }
+
+        beginTest ("onFileDone delivers one delta per file, carrying only that file's result");
+        {
+            FakeRunner r;
+            r.results["C:/v/A.vst3"]    = { ScanProcessResult::Status::ok,
+                                            scanResultXmlFor (makeDesc ("A", "C:/v/A.vst3")) };
+            r.results["C:/v/Hang.vst3"] = { ScanProcessResult::Status::timeout, {} };
+
+            juce::Array<ScanOutcome> deltas;
+            auto out = runScan ({ "C:/v/A.vst3", "C:/v/Hang.vst3" }, r, 1000, {},
+                                [] { return false; }, nullptr,
+                                [&] (const ScanOutcome& d) { deltas.add (d); });
+
+            expect (out.completed);
+            expectEquals (deltas.size(), 2);
+            expectEquals (deltas[0].found.size(), 1);
+            expectEquals (deltas[0].found[0].name, juce::String ("A"));
+            expectEquals (deltas[0].skipped.size(), 0);
+            expectEquals (deltas[1].found.size(), 0);
+            expectEquals (deltas[1].skipped.size(), 1);
+            expectEquals (deltas[1].skipped[0].file, juce::String ("C:/v/Hang.vst3"));
+        }
+
+        beginTest ("crash-rescue delta carries rescued types AND the skip entry together");
+        {
+            FakeRunner r;
+            juce::XmlElement root ("MicVSTScanResult");
+            root.setAttribute ("crashCode", "0xC0000005");
+            root.addChildElement (makeDesc ("W1", "C:/v/Shell.vst3").createXml().release());
+            ScanProcessResult pr;
+            pr.status = ScanProcessResult::Status::partial;
+            pr.resultXmlText = root.toString();
+            pr.exitCode = 3;
+            r.results["C:/v/Shell.vst3"] = pr;
+
+            juce::Array<ScanOutcome> deltas;
+            runScan ({ "C:/v/Shell.vst3" }, r, 1000, {}, [] { return false; }, nullptr,
+                     [&] (const ScanOutcome& d) { deltas.add (d); });
+
+            expectEquals (deltas.size(), 1);
+            expectEquals (deltas[0].found.size(), 1);
+            expectEquals (deltas[0].skipped.size(), 1);
+        }
+
+        beginTest ("abort keeps the deltas of already finished files (the rescan-loop bug)");
+        {
+            // Der eigentliche Regressionstest: vor dem Fix lieferte ein abgebrochener Scan
+            // NICHTS zurück (finishedCb wird bei completed == false nie gerufen) -> der
+            // Aufrufer konnte nichts persistieren und scannte beim naechsten Start alles neu.
+            FakeRunner r;
+            r.results["C:/v/A.vst3"] = { ScanProcessResult::Status::ok,
+                                         scanResultXmlFor (makeDesc ("A", "C:/v/A.vst3")) };
+            r.results["C:/v/B.vst3"] = { ScanProcessResult::Status::ok,
+                                         scanResultXmlFor (makeDesc ("B", "C:/v/B.vst3")) };
+
+            juce::Array<ScanOutcome> deltas;
+            // Nach der ersten Datei abbrechen (wie ein App-Quit mitten im Scan).
+            auto out = runScan ({ "C:/v/A.vst3", "C:/v/B.vst3" }, r, 1000, {},
+                                [&] { return deltas.size() >= 1; }, nullptr,
+                                [&] (const ScanOutcome& d) { deltas.add (d); });
+
+            expect (! out.completed);                 // Scan lief NICHT durch
+            expectEquals ((int) r.calls.size(), 1);   // B wurde nie angefasst
+            expectEquals (deltas.size(), 1);          // A ist trotzdem beim Aufrufer angekommen
+            expectEquals (deltas[0].found.size(), 1);
+            expectEquals (deltas[0].found[0].name, juce::String ("A"));
+        }
+
+        beginTest ("runner-level abort keeps earlier deltas, emits none for the aborted file");
+        {
+            FakeRunner r;
+            r.results["C:/v/A.vst3"]     = { ScanProcessResult::Status::ok,
+                                             scanResultXmlFor (makeDesc ("A", "C:/v/A.vst3")) };
+            r.results["C:/v/Killed.vst3"] = { ScanProcessResult::Status::aborted, {} };
+
+            juce::Array<ScanOutcome> deltas;
+            auto out = runScan ({ "C:/v/A.vst3", "C:/v/Killed.vst3" }, r, 1000, {},
+                                [] { return false; }, nullptr,
+                                [&] (const ScanOutcome& d) { deltas.add (d); });
+
+            expect (! out.completed);
+            expectEquals (deltas.size(), 1);
+            expectEquals (deltas[0].found[0].name, juce::String ("A"));
+        }
     }
 };
 static RunScanTest runScanTest;
@@ -411,10 +534,220 @@ struct FilterFilesNeedingScanTest : juce::UnitTest
             expect (withForce.contains (forced.getFullPathName()));
         }
 
+        beginTest ("force-list also bypasses the skip filter and keeps the entry for now");
+        {
+            // "Retry skipped plugins": die Skip-Liste wird NICHT vorab geleert, damit ein
+            // Abbruch mitten im Retry die noch nicht versuchten Einträge nicht verliert.
+            // Also muss forceRescan den Skip-Filter aushebeln; aufgeräumt wird erst pro
+            // Teilergebnis (applySkipDelta).
+            auto retried = mk ("Retried.vst3");
+            juce::KnownPluginList emptyList;
+            juce::Array<SkippedPlugin> skips2;
+            skips2.add ({ retried.getFullPathName(), "unresponsive",
+                          effectiveModTime (retried).toMilliseconds() });
+
+            auto out2 = filterFilesNeedingScan ({ retried.getFullPathName() }, emptyList, vst3, skips2,
+                                                { retried.getFullPathName() });
+            expect (out2.contains (retried.getFullPathName()));
+            expectEquals (skips2.size(), 1);   // Eintrag bleibt bis zum Teilergebnis stehen
+        }
+
         dir.deleteRecursively();
     }
 };
 static FilterFilesNeedingScanTest filterFilesNeedingScanTest;
+
+struct Vst3UidHashTest : juce::UnitTest
+{
+    Vst3UidHashTest() : juce::UnitTest ("vst3 uid hashes") {}
+    void runTest() override
+    {
+        // Golden-Vektoren: cid-Bytes direkt aus der Factory gelesen, Erwartungswerte aus
+        // JUCEs EIGENER Ausgabe für dieselben Plugins (Scan-Ergebnis-XML bzw. Cache). Sie
+        // nageln die Byte-Reihenfolge fest -- die ist der fehleranfällige Teil, weil FUID
+        // auf Windows (COM_COMPATIBLE) die ersten acht Bytes paarweise vertauscht liest
+        // und ein naives Big-Endian-Lesen falsche, aber plausible Werte liefert.
+        struct Vector { const char* name; const char* cidHex; juce::uint32 uniqueId, deprecatedUid; };
+
+        const Vector vectors[] = {
+            // WaveShell1-VST3 17.1 -- Waves kodiert ASCII in die cid (alle Bytes < 0x80)
+            { "CLA-76 Mono",   "375453564336634d6c612d3736206d6f", 0xd39f9424, 0xf81fc928 },
+            { "X-FDBK Stereo", "41545356534678532d6664626b207374", 0xb46ca8e9, 0xed3e8a11 },
+            // FabFilter Pro-Q 3 -- echte GUID mit Bytes >= 0x80 (0xc4, 0x9a, 0xb9, 0x84,
+            // 0xb3, 0x9d); prüft die Vorzeichenerweiterung in deprecatedUid
+            { "Pro-Q 3",       "71dbc4724d7a9a45b97e51745d84b39d", 0xba5f7ab2, 0x8c4652e9 },
+        };
+
+        for (auto& v : vectors)
+        {
+            beginTest (juce::String ("uid hashes match JUCE for ") + v.name);
+
+            juce::MemoryBlock cid;
+            cid.loadFromHexString (v.cidHex);
+            expectEquals ((int) cid.getSize(), 16);
+
+            expectEquals ((juce::uint32) vst3UniqueIdFromCid (cid.getData()),     v.uniqueId);
+            expectEquals ((juce::uint32) vst3DeprecatedUidFromCid (cid.getData()), v.deprecatedUid);
+        }
+
+        beginTest ("byte order actually matters (guards against naive big-endian reads)");
+        {
+            // Zwei cids, die sich NUR in der Reihenfolge der ersten vier Bytes
+            // unterscheiden, müssen verschiedene uniqueIds ergeben -- sonst wäre der
+            // COM_COMPATIBLE-Swap wirkungslos implementiert.
+            juce::MemoryBlock a, b;
+            a.loadFromHexString ("00010203000000000000000000000000");
+            b.loadFromHexString ("03020100000000000000000000000000");
+            expectEquals ((int) a.getSize(), 16);
+            expectEquals ((int) b.getSize(), 16);
+            expect (vst3UniqueIdFromCid (a.getData()) != vst3UniqueIdFromCid (b.getData()));
+        }
+    }
+};
+static Vst3UidHashTest vst3UidHashTest;
+
+struct ApplySkipDeltaTest : juce::UnitTest
+{
+    ApplySkipDeltaTest() : juce::UnitTest ("applySkipDelta") {}
+    void runTest() override
+    {
+        auto baseList = []
+        {
+            juce::Array<SkippedPlugin> s;
+            s.add ({ "C:/v/Shell.vst3", "unresponsive", 100 });
+            s.add ({ "C:/v/Other.vst3", "failed", 200 });
+            return s;
+        };
+
+        beginTest ("successful retry drops the stale skip entry");
+        {
+            auto skipped = baseList();
+            ScanOutcome delta; delta.found.add (makeDesc ("W", "C:/v/Shell.vst3"));
+            applySkipDelta (skipped, delta);
+            expectEquals (skipped.size(), 1);
+            expectEquals (skipped[0].file, juce::String ("C:/v/Other.vst3"));
+        }
+
+        beginTest ("failing retry replaces the entry instead of duplicating it");
+        {
+            auto skipped = baseList();
+            ScanOutcome delta;
+            delta.skipped.add ({ "C:/v/Shell.vst3", "failed (exit 0xC0000005)", 999 });
+            applySkipDelta (skipped, delta);
+            expectEquals (skipped.size(), 2);
+            const auto* shell = std::find_if (skipped.begin(), skipped.end(),
+                [] (const SkippedPlugin& s) { return s.file == "C:/v/Shell.vst3"; });
+            expect (shell != skipped.end());
+            expectEquals (shell->reason, juce::String ("failed (exit 0xC0000005)"));
+            expect (shell->fileTimeMs == 999);
+        }
+
+        beginTest ("crash-rescue delta (found AND skipped for one file) stays single-entry");
+        {
+            auto skipped = baseList();
+            ScanOutcome delta;
+            delta.found.add (makeDesc ("W", "C:/v/Shell.vst3"));
+            delta.skipped.add ({ "C:/v/Shell.vst3", "crashed (1 plugin(s) rescued)", 7 });
+            applySkipDelta (skipped, delta);
+            expectEquals (skipped.size(), 2);
+        }
+
+        beginTest ("untouched files keep their entries");
+        {
+            auto skipped = baseList();
+            ScanOutcome delta; delta.found.add (makeDesc ("N", "C:/v/New.vst3"));
+            applySkipDelta (skipped, delta);
+            expectEquals (skipped.size(), 2);
+        }
+    }
+};
+static ApplySkipDeltaTest applySkipDeltaTest;
+
+struct FindTypeForEntryTest : juce::UnitTest
+{
+    FindTypeForEntryTest() : juce::UnitTest ("findTypeForEntry") {}
+    void runTest() override
+    {
+        // Shell-Plugin: viele Typen hinter EINEM Dateipfad (WaveShell: 347). Ohne die
+        // uniqueId liefert KnownPluginList::getTypeForFile immer den ERSTEN Treffer --
+        // nach einem Neustart stünde dann ein beliebiges Waves-Plugin in der Kette,
+        // und dessen Zustands-Blob würde aufs falsche Plugin angewendet.
+        juce::KnownPluginList list;
+        const juce::String shell = "C:/v/WaveShell.vst3";
+        auto a = makeDesc ("NS1 Mono",   shell); a.uniqueId = 0x1111;
+        auto b = makeDesc ("NS1 Stereo", shell); b.uniqueId = 0x2222;
+        auto c = makeDesc ("C1 comp",    shell); c.uniqueId = 0x3333;
+        list.addType (a); list.addType (b); list.addType (c);
+
+        beginTest ("uniqueId picks the right type out of a shell");
+        {
+            auto t = findTypeForEntry (list, shell, 0x2222);
+            expect (t != nullptr);
+            expectEquals (t->name, juce::String ("NS1 Stereo"));
+
+            auto t3 = findTypeForEntry (list, shell, 0x3333);
+            expect (t3 != nullptr);
+            expectEquals (t3->name, juce::String ("C1 comp"));
+        }
+
+        beginTest ("uniqueId 0 (config from an older version) still resolves to that file");
+        {
+            // WELCHER Typ der Datei dabei herauskommt, ist absichtlich nicht festgelegt:
+            // genau diese beliebige Wahl traf vorher auch getTypeForFile, alte Configs
+            // verhalten sich also unverändert. Garantiert ist nur: ein Typ DIESER Datei.
+            auto t = findTypeForEntry (list, shell, 0);
+            expect (t != nullptr);
+            expectEquals (t->fileOrIdentifier, shell);
+        }
+
+        beginTest ("unknown uniqueId for a known file still resolves to that file");
+        {
+            // Plugin-Update kann die uid ändern; die Datei ist aber eindeutig da.
+            auto t = findTypeForEntry (list, shell, 0x9999);
+            expect (t != nullptr);
+            expectEquals (t->fileOrIdentifier, shell);
+        }
+
+        beginTest ("unknown file resolves to nothing");
+        expect (findTypeForEntry (list, "C:/v/Nope.vst3", 0x1111) == nullptr);
+    }
+};
+static FindTypeForEntryTest findTypeForEntryTest;
+
+struct ChainIsResolvableTest : juce::UnitTest
+{
+    ChainIsResolvableTest() : juce::UnitTest ("chainIsResolvable") {}
+    void runTest() override
+    {
+        juce::KnownPluginList list;
+        list.addType (makeDesc ("Known", "C:/v/Known.vst3"));
+
+        auto entry = [] (const juce::String& fileOrId)
+        {
+            PluginEntryState p; p.fileOrId = fileOrId; return p;
+        };
+
+        beginTest ("empty chain needs nothing from the cache");
+        expect (chainIsResolvable ({}, list));
+
+        beginTest ("builtin converters never need the cache");
+        {
+            juce::KnownPluginList empty;
+            expect (chainIsResolvable ({ entry ("builtin:mono2stereo"),
+                                         entry ("builtin:stereo2mono") }, empty));
+        }
+
+        beginTest ("cached plugin resolves, uncached one does not");
+        expect (chainIsResolvable ({ entry ("C:/v/Known.vst3") }, list));
+        expect (! chainIsResolvable ({ entry ("C:/v/Missing.vst3") }, list));
+
+        beginTest ("a single missing entry blocks the whole chain");
+        expect (! chainIsResolvable ({ entry ("builtin:mono2stereo"),
+                                       entry ("C:/v/Known.vst3"),
+                                       entry ("C:/v/Missing.vst3") }, list));
+    }
+};
+static ChainIsResolvableTest chainIsResolvableTest;
 
 struct PathScopeTest : juce::UnitTest
 {

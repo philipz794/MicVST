@@ -195,20 +195,49 @@ void AudioEngine::startBackgroundScan (int timeoutMs, const juce::StringArray& f
         {
             if (onScanProgress) onScanProgress (cur, total, name);
         },
-        [this] (ScanOutcome outcome) { handleScanFinished (outcome); },
+        [this] (ScanOutcome delta) { applyScanDelta (delta); },
+        [this] { handleScanFinished(); },
         timeoutMs);
 }
 
-void AudioEngine::handleScanFinished (const ScanOutcome& outcome)
+// Teilergebnis EINER gescannten Datei übernehmen und sofort persistieren. Der Save pro
+// Datei ist Absicht: bis v1.1.1 schrieb nur handleScanFinished den Cache, und das lief bei
+// Abbruch (App-Quit mitten im Scan) nie -> die komplette Arbeit war weg und der nächste
+// Start scannte alles erneut. Bei Nutzern mit vielen Plugins und Shell-Plugins (WaveShell,
+// bis zu 120 s pro Datei) dauert ein Scan Minuten, ein Quit davor ist also der Normalfall
+// und die Schleife schließt sich nie. Kosten: ein XML-Write pro Datei (JUCE schreibt via
+// Temp-Datei + Rename, ein Crash kann den Cache also nicht halb beschrieben hinterlassen).
+void AudioEngine::applyScanDelta (const ScanOutcome& delta)
+{
+    mergeScanResults (knownPlugins, delta);
+    applySkipDelta (skippedPlugins, delta);
+    for (auto& s : delta.skipped)
+        juce::Logger::writeToLog ("Scan übersprungen (" + s.reason + "): " + s.file);
+    PluginScanCache::save (pluginCacheFile(), knownPlugins, skippedPlugins);
+    tryRestorePendingChain();
+}
+
+// Zurückgestellten Ketten-Restore erneut versuchen: sobald ALLE Plugins der gespeicherten
+// Kette auflösbar sind, muss sie nicht mehr auf das Scan-ENDE warten. Vorher blieb die
+// Mikrofon-Kette den ganzen (bei vielen Plugins minutenlangen) Scan über leer -- und wurde
+// bei einem Abbruch mitten im Scan in dieser Sitzung überhaupt nicht wiederhergestellt.
+void AudioEngine::tryRestorePendingChain()
+{
+    if (pendingPlugins.isEmpty() || ! chainIsResolvable (pendingPlugins, knownPlugins))
+        return;
+
+    juce::Logger::writeToLog ("Ketten-Restore: alle Plugins da, Kette wird aufgebaut");
+    restoreChain (pendingPlugins);
+    pendingPlugins.clear();
+    if (onChainRestored) onChainRestored();   // UI-Zeilen neu aufbauen
+}
+
+void AudioEngine::handleScanFinished()
 {
     scanner = nullptr;   // Callback kommt via callAsync -> wir sind auf dem Message-Thread
 
-    mergeScanResults (knownPlugins, outcome);
-    for (auto& s : outcome.skipped)
-    {
-        skippedPlugins.add (s);
-        juce::Logger::writeToLog ("Scan übersprungen (" + s.reason + "): " + s.file);
-    }
+    // Die Ergebnisse stecken schon in knownPlugins/skippedPlugins: applyScanDelta lief für
+    // jede Datei und ging diesem Callback auf dem Message-Thread voraus.
 
     // Ordner können während des Scans entfernt worden sein -> NACH dem Übernehmen wegputzen,
     // damit auch frisch gescannte Fremd-Ergebnisse rausfliegen.
@@ -216,6 +245,9 @@ void AudioEngine::handleScanFinished (const ScanOutcome& outcome)
 
     PluginScanCache::save (pluginCacheFile(), knownPlugins, skippedPlugins);
 
+    // Letzte Chance für einen noch offenen Restore: hier OHNE Auflösbarkeits-Check, denn
+    // nach dem Scan kommt nichts mehr nach -- fehlende Plugins werden einzeln geloggt und
+    // übersprungen. Ein UI-Refresh braucht's nicht extra, onScanFinished macht rebuildRows.
     if (! pendingPlugins.isEmpty())
     {
         restoreChain (pendingPlugins);
@@ -239,16 +271,17 @@ void AudioEngine::retrySkippedPlugins()
 {
     if (isScanning() || skippedPlugins.isEmpty()) return;
 
-    // Crash-Rescue: Gerettete Typen sind im Cache schon mit AKTUELLER effectiveModTime
-    // gestempelt (mergeScanResults) -> ohne forceRescan hielte filterFilesNeedingScan die
-    // Datei für up-to-date und der Retry würde für sie stillschweigend nichts tun. Vor dem
-    // Leeren einsammeln (skippedPlugins ist danach weg), nur noch existierende Dateien.
+    // Alle (noch existierenden) geskippten Dateien erzwingen: forceRescan hebelt sowohl den
+    // Skip-Filter als auch den Cache-Check aus -- letzteres, weil mergeScanResults gerettete
+    // Typen sofort frisch stempelt und der Retry sonst stillschweigend nichts täte.
+    // Die Skip-Liste wird NICHT vorab geleert: sonst stünde nach dem ersten Teilergebnis
+    // eine leere Liste auf der Platte und ein Quit mitten im Retry würde die noch nicht
+    // versuchten Einträge verlieren. applySkipDelta räumt pro Datei auf.
     juce::StringArray forceRescan;
     for (auto& s : skippedPlugins)
         if (juce::File (s.file).exists())
             forceRescan.add (s.file);
 
-    skippedPlugins.clear();   // Cache/Fundliste bleiben -> nur die Geskippten werden gescannt
     startBackgroundScan (ScanCoordinator::retryTimeoutMs, forceRescan);
 }
 
@@ -302,6 +335,7 @@ MicVSTState AudioEngine::captureState()
         PluginEntryState p;
         p.fileOrId = e.fileOrId;
         p.bypassed = e.bypassed;
+        p.uniqueId = e.uniqueId;   // nötig, um Plugins derselben Shell zu unterscheiden
         if (auto* node = graph.getNodeForId (e.node))
         {
             auto* proc = node->getProcessor();
@@ -319,16 +353,17 @@ void AudioEngine::applyState (const MicVSTState& s)
     initialise (s.inputDevice, s.outputDevice);
 
     // Kette nur wiederherstellen, wenn alle Nicht-Builtin-Plugins im Cache auflösbar sind.
-    // Sonst bis Scan-Ende zurückstellen (captureState liefert solange pendingPlugins,
-    // damit persistState die Kette nicht mit "leer" überschreibt).
-    bool allResolvable = true;
-    for (auto& p : s.plugins)
-        if (! p.fileOrId.startsWith ("builtin:") && knownPlugins.getTypeForFile (p.fileOrId) == nullptr)
-            { allResolvable = false; break; }
-
-    if (allResolvable) restoreChain (s.plugins);
-    else               { pendingPlugins = s.plugins;
-                         juce::Logger::writeToLog ("Ketten-Restore wartet auf Plugin-Scan"); }
+    // Sonst zurückstellen, bis der Scan sie geliefert hat (captureState gibt solange
+    // pendingPlugins zurück, damit persistState die Kette nicht mit "leer" überschreibt).
+    if (chainIsResolvable (s.plugins, knownPlugins))
+    {
+        restoreChain (s.plugins);
+    }
+    else
+    {
+        pendingPlugins = s.plugins;
+        juce::Logger::writeToLog ("Ketten-Restore wartet auf Plugin-Scan");
+    }
     rebuildGraph();
 }
 
@@ -347,7 +382,10 @@ void AudioEngine::restoreChain (const juce::Array<PluginEntryState>& plugins)
             continue;
         }
 
-        auto type = knownPlugins.getTypeForFile (p.fileOrId);
+        // NICHT getTypeForFile: bei Shell-Plugins teilen sich hunderte Typen eine Datei
+        // (WaveShell), und getTypeForFile liefert immer den ersten -- die Kette bekäme
+        // nach dem Neustart ein beliebiges Plugin der Shell. Siehe findTypeForEntry.
+        auto type = findTypeForEntry (knownPlugins, p.fileOrId, p.uniqueId);
         if (type == nullptr) { juce::Logger::writeToLog ("Plugin fehlt: " + p.fileOrId); continue; }
         juce::String err;
         if (pluginChain->addPlugin (formatManager, *type, sr, 128, err))
