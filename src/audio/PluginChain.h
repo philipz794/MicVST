@@ -13,7 +13,10 @@ public:
     static constexpr const char* monoToStereoId = "builtin:mono2stereo";
     static constexpr const char* stereoToMonoId = "builtin:stereo2mono";
 
-    struct Entry { NodeID node; juce::String fileOrId; bool bypassed = false;
+    // uniqueId: unterscheidet Plugins, die sich eine Datei teilen (Shell-Plugins wie
+    // WaveShell bringen hunderte Typen hinter EINEM Pfad mit). 0 = internes Glied bzw.
+    // aus einer Config vor Einführung des Feldes geladen.
+    struct Entry { NodeID node; juce::String fileOrId; bool bypassed = false; int uniqueId = 0;
                    bool isBuiltIn() const { return fileOrId.startsWith ("builtin:"); } };
 
     PluginChain (juce::AudioProcessorGraph& graph,

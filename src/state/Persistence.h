@@ -7,6 +7,10 @@ struct PluginEntryState
     juce::String fileOrId;
     bool bypassed = false;
     juce::MemoryBlock state;   // getStateInformation()-Blob
+    // Unterscheidet Plugins, die sich eine Datei teilen (Shell-Plugins wie WaveShell:
+    // hunderte Typen hinter EINEM Pfad). 0 = internes Glied oder Config aus einer Version
+    // vor Einführung des Feldes -> findTypeForEntry nimmt dann den ersten Treffer der Datei.
+    int uniqueId = 0;
 };
 
 struct MicVSTState

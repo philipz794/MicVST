@@ -110,7 +110,7 @@ bool PluginChain::addPlugin (juce::AudioPluginFormatManager& fm,
     auto node = graph.addNode (std::move (instance));
     if (node == nullptr) { errorOut = "addNode failed"; return false; }
 
-    chain.push_back ({ node->nodeID, desc.fileOrIdentifier, false });
+    chain.push_back ({ node->nodeID, desc.fileOrIdentifier, false, desc.uniqueId });
     return true;
 }
 

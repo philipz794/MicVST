@@ -5,7 +5,8 @@ namespace ids
     const juce::Identifier root ("MicVST"), inDev ("inputDevice"), outDev ("outputDevice"),
         sr ("sampleRate"), userBuf ("userBufferSize"), folders ("pluginFolders"), window ("windowState"),
         updEnabled ("updateCheckEnabled"), updAsked ("updateCheckAsked"), updLast ("lastNotifiedVersion"),
-        plugins ("plugins"), plugin ("plugin"), fileId ("fileOrId"), byp ("bypassed"), blob ("state");
+        plugins ("plugins"), plugin ("plugin"), fileId ("fileOrId"), byp ("bypassed"), blob ("state"),
+        uid ("uniqueId");
 }
 
 juce::ValueTree toValueTree (const MicVSTState& s)
@@ -27,6 +28,7 @@ juce::ValueTree toValueTree (const MicVSTState& s)
         juce::ValueTree pt (ids::plugin);
         pt.setProperty (ids::fileId, p.fileOrId, nullptr);
         pt.setProperty (ids::byp, p.bypassed, nullptr);
+        pt.setProperty (ids::uid, p.uniqueId, nullptr);
         pt.setProperty (ids::blob, p.state.toBase64Encoding(), nullptr);
         list.appendChild (pt, nullptr);
     }
@@ -58,6 +60,7 @@ MicVSTState fromValueTree (const juce::ValueTree& t)
         PluginEntryState p;
         p.fileOrId = pt.getProperty (ids::fileId);
         p.bypassed = pt.getProperty (ids::byp, false);
+        p.uniqueId = pt.getProperty (ids::uid, 0);   // fehlt in Configs vor v1.1.2
         p.state.fromBase64Encoding (pt.getProperty (ids::blob).toString());
         s.plugins.add (p);
     }
