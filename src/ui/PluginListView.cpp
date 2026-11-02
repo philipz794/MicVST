@@ -39,14 +39,14 @@ PluginListView::HotkeyButton::HotkeyButton (PluginListView& ownerIn, int idx)
 {
     setWantsKeyboardFocus (true);
     conflicted = owner.conflictingHotkeys.contains (index);
-    setTooltip ("Global hotkey to bypass this plugin - click, then press a combination "
-                "(Esc clears). Needs at least one of Ctrl/Alt/Shift/Win.");
+    setTooltip ("Global hotkey to bypass this plugin - click, then press a key or "
+                "combination (Esc clears). Letters, digits, F1-F12 and the numeric keypad "
+                "are accepted. A key without Ctrl/Alt/Shift/Win also fires while you use "
+                "it in other applications.");
     onClick = [this]
     {
-        // WICHTIG: waehrend der Aufnahme unsere eigenen Hotkeys abmelden. Sonst faengt
-        // RegisterHotKey die Taste ab, bevor sie das Eingabefeld erreicht -- eine bereits
-        // belegte Kombination koennte man dann nie neu zuweisen, sie wuerde stattdessen
-        // ein Plugin umschalten.
+        // Waehrend der Aufnahme die eigenen Hotkeys abmelden: sonst wuerde das Druecken
+        // einer schon belegten Kombination NEBENBEI das zugehoerige Plugin umschalten.
         capturing = true;
         owner.hotkeys.setBindings ({});
         grabKeyboardFocus();
@@ -65,10 +65,21 @@ void PluginListView::HotkeyButton::paintButton (juce::Graphics& g, bool highligh
                            : (highlighted ? juce::Colour (0xff3a3a3a) : juce::Colour (0xff303030)));
     g.fillRoundedRectangle (b, 3.0f);
 
-    if (conflicted && ! capturing)
+    if (! capturing)
     {
-        g.setColour (juce::Colours::orangered);
-        g.drawRoundedRectangle (b, 3.0f, 1.0f);
+        // Rot = funktioniert nicht (der Tastatur-Hook liess sich nicht installieren).
+        // Gelb = ohne Modifier, loest daher auch beim normalen Tippen in anderen
+        // Programmen aus.
+        if (conflicted)
+        {
+            g.setColour (juce::Colours::orangered);
+            g.drawRoundedRectangle (b, 3.0f, 1.0f);
+        }
+        else if (hk.isModifierless())
+        {
+            g.setColour (juce::Colours::gold);
+            g.drawRoundedRectangle (b, 3.0f, 1.0f);
+        }
     }
 
     g.setColour (capturing ? juce::Colours::black
@@ -97,6 +108,18 @@ bool PluginListView::HotkeyButton::keyPressed (const juce::KeyPress& kp)
         return true;   // unbrauchbare Taste: im Aufnahmemodus bleiben, nichts aendern
 
     capturing = false;
+
+    // Ohne Modifier beobachtet MicVST die Taste nur (sie wird nicht verschluckt), loest
+    // also auch aus, wenn man sie woanders normal benutzt. Das ist bei einem Buchstaben
+    // oder einer Ziffer fast immer ein Versehen -> nachfragen, statt es stillschweigend
+    // zu uebernehmen.
+    if (hk.isModifierless())
+    {
+        owner.confirmModifierlessHotkey (index, hk);
+        repaint();
+        return true;
+    }
+
     owner.setHotkey (index, hk);
     return true;
 }
@@ -353,6 +376,30 @@ void PluginListView::applyHotkeyBindings()
     for (auto& e : engine.getChain().entries())
         bindings.add (e.hotkey);
     conflictingHotkeys = hotkeys.setBindings (bindings);
+}
+
+void PluginListView::confirmModifierlessHotkey (int index, const Hotkey& hk)
+{
+    // Ein Buchstabe oder eine Ziffer ohne Modifier trifft man beim normalen Tippen
+    // dauernd; F-Tasten und Ziffernblock sind deutlich harmloser. Der Text sagt beides.
+    const bool typedOften = (hk.key >= 'A' && hk.key <= 'Z') || (hk.key >= '0' && hk.key <= '9');
+
+    juce::String msg;
+    msg << "\"" << hk.toDisplayString() << "\" has no modifier key.\n\n"
+        << "MicVST never takes a key away from other programs - it only watches for it. "
+           "Without a modifier that means the plugin toggles every single time you press "
+           "this key in any application";
+    msg << (typedOften ? ", including while you are typing. For a letter or a digit that is "
+                         "almost never what you want.\n\nUse it anyway?"
+                       : ".\n\nUse it?");
+
+    juce::NativeMessageBox::showOkCancelBox (
+        juce::MessageBoxIconType::WarningIcon, "Hotkey without a modifier", msg, nullptr,
+        juce::ModalCallbackFunction::create ([this, index, hk] (int result)
+        {
+            if (result == 1) setHotkey (index, hk);
+            else             rebuildRows();   // verworfen -> Feld wieder normal zeichnen
+        }));
 }
 
 void PluginListView::setHotkey (int index, const Hotkey& hk)

@@ -3,31 +3,55 @@
 #include <functional>
 #include "state/Hotkey.h"
 
-// Systemweite Hotkeys. juce::KeyPress genuegt dafuer NICHT: MicVST lebt im Tray, die
+// Systemweite Hotkeys. juce::KeyPress genuegt dafuer nicht: MicVST lebt im Tray, die
 // Tastenkombination muss also auch greifen, wenn das Fenster keinen Fokus hat (und waehrend
-// der Nutzer in einer DAW, einem Spiel oder Discord ist). Darum Win32 RegisterHotKey mit
-// einem message-only Window -- kein Keyboard-Hook, der von Virenscannern angemeckert wird.
+// der Nutzer in einer DAW, einem Spiel oder Discord ist).
 //
-// setBindings() registriert die uebergebene Liste komplett neu (Index = Position in der
-// Plugin-Kette). Nicht gesetzte Hotkeys werden uebersprungen, es wird also nur fuer
-// tatsaechlich belegte Tasten etwas beim System angemeldet.
+// Umgesetzt als Low-Level-Hook (WH_KEYBOARD_LL), der Tasten nur BEOBACHTET und immer
+// weiterreicht -- so macht es Discord fuer Push-to-Talk auch.
+//
+// Ausdruecklich NICHT per RegisterHotKey, obwohl das der naheliegende Weg waere: das
+// VERSCHLUCKT die Kombination systemweit. Bindet ein Nutzer damit Ctrl+C, funktioniert
+// Kopieren danach nirgendwo mehr -- und zwar ohne jede Fehlermeldung, denn Ctrl+C ist von
+// keinem anderen Programm global belegt (es wird pro Anwendung behandelt), die
+// Registrierung gelingt also. Eine Mikrofon-Hilfsanwendung hat keinen Grund, dem System
+// Tastenkombinationen wegzunehmen.
+//
+// Die Kehrseite des Beobachtens: ein Hotkey loest AUCH im Vordergrundprogramm aus. Wer
+// Ctrl+Alt+K bindet, schickt Ctrl+Alt+K weiterhin auch an seine DAW. Fuer einen
+// Bypass-Umschalter ist das der bessere Kompromiss.
+//
+// Der Hook wird nur installiert, wenn mindestens ein Hotkey gebunden ist. Im Default --
+// nichts gebunden -- existiert er nicht. Das ist absichtlich so, weil ein globaler
+// Keyboard-Hook derselbe Mechanismus ist, den Keylogger verwenden, und manche
+// Virenscanner heuristisch darauf anschlagen. Er wertet ausschliesslich den
+// Virtual-Key-Code gegen die gebundene Liste aus; Tastendruecke werden nicht
+// gespeichert, protokolliert oder weitergegeben.
 class GlobalHotkeys
 {
 public:
     GlobalHotkeys();
     ~GlobalHotkeys();
 
-    // Gibt die Indizes zurueck, deren Registrierung fehlschlug -- praktisch immer, weil ein
-    // anderes Programm die Kombination schon haelt. Der Aufrufer kann das in der UI zeigen.
+    // Uebernimmt die Bindungsliste (Index = Position in der Plugin-Kette); nicht gesetzte
+    // Eintraege werden uebersprungen. Rueckgabe sind die Indizes, die NICHT funktionieren
+    // werden -- das kann nur passieren, wenn der Hook sich nicht installieren liess (dann
+    // alle). Kollisionen mit anderen Programmen gibt es hier nicht: wir beanspruchen
+    // nichts, mehrere Programme koennen auf dieselbe Taste reagieren.
     juce::Array<int> setBindings (const juce::Array<Hotkey>& bindings);
 
-    // Wird auf dem Message-Thread aufgerufen (das Fenster gehoert ihm, und JUCEs
-    // Message-Loop verteilt WM_HOTKEY per DispatchMessage an unsere WndProc).
+    // Wird auf dem Message-Thread aufgerufen.
     std::function<void (int index)> onHotkey;
 
+    // Nur fuer die Hook-Callback-Funktion (muss von aussen erreichbar sein).
+    void handleHookedKey (int vk, bool isDown);
+
 private:
-    void* hwnd = nullptr;        // HWND, ohne windows.h im Header
-    juce::Array<int> registered; // Indizes, die aktuell beim System angemeldet sind
+    void updateKeyboardHook();   // installiert/entfernt den Hook je nach Bedarf
+
+    void* hook = nullptr;        // HHOOK, ohne windows.h im Header
+    juce::Array<Hotkey> current; // komplette Bindungsliste
+    juce::Array<int> heldKeys;   // gerade gedrueckte gebundene VKs -> Tastenwiederholung
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (GlobalHotkeys)
 };

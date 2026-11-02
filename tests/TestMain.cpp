@@ -200,11 +200,30 @@ struct HotkeyTest : juce::UnitTest
             expectEquals (hotkeyFromKeyCode (vkF12 | ext, true, false, false, false).key, vkF12);
         }
 
-        beginTest ("a combination without any modifier is rejected");
+        beginTest ("keys without a modifier are allowed but flagged for the hook path");
         {
-            // Sonst wuerde RegisterHotKey die nackte Taste systemweit abfangen.
-            expect (! hotkeyFromKeyCode ('K', false, false, false, false).isSet());
-            expect (! hotkeyFromKeyCode (vkF5 | ext, false, false, false, false).isSet());
+            // Ohne Modifier kann RegisterHotKey nicht benutzt werden -- es wuerde die
+            // nackte Taste systemweit verschlucken. Solche Hotkeys laufen stattdessen
+            // ueber den beobachtenden Low-Level-Hook, und genau das muss needsKeyboardHook
+            // melden, damit GlobalHotkeys den richtigen Mechanismus waehlt.
+            auto bare = hotkeyFromKeyCode (vkF5 | ext, false, false, false, false);
+            expect (bare.isSet());
+            expectEquals (bare.mods, 0);
+            expectEquals (bare.key, vkF5);
+            expect (bare.isModifierless());
+            expectEquals (bare.toDisplayString(), juce::String ("F5"));
+
+            auto bareLetter = hotkeyFromKeyCode ('K', false, false, false, false);
+            expect (bareLetter.isSet());
+            expect (bareLetter.isModifierless());
+            expectEquals (bareLetter.toDisplayString(), juce::String ("K"));
+
+            // Mit Modifier laeuft es ueber RegisterHotKey, der Hook ist dann unnoetig.
+            expect (! hotkeyFromKeyCode ('K', true, false, false, false).isModifierless());
+            expect (! hotkeyFromKeyCode (vkF5 | ext, false, false, true, false).isModifierless());
+
+            // Ein ungesetzter Hotkey braucht gar nichts.
+            expect (! Hotkey {}.isModifierless());
         }
 
         beginTest ("numpad keys are accepted, including the operators");

@@ -69,10 +69,13 @@ boot (no window, engine running). For a stable setup, copy the `.exe` to a fixed
 - **Drag-to-reorder** plugin list, per-row bypass, remove with confirmation, per-plugin editor
   windows
 - **Global hotkeys** to toggle individual plugins: click the hotkey field in a plugin row, then
-  press a combination (needs at least one of Ctrl/Alt/Shift/Win; Esc clears). It works while
-  MicVST sits in the tray and another app has focus. Nothing is bound by default, so MicVST
-  never takes a key away from your DAW unless you ask it to; a combination another program
-  already owns is marked in red.
+  press a key or combination (letters, digits, F1-F12, numeric keypad; Esc clears). Works while
+  MicVST sits in the tray and another app has focus, and the hotkey moves with the plugin when
+  you reorder the chain. MicVST only *watches* for the key and never takes it away from anything
+  else - bind Ctrl+C and copying still works. The flip side is that a key without a modifier also
+  fires while you use it elsewhere, so those are outlined in yellow and ask for confirmation
+  first. Nothing is bound by default, and with no hotkey set MicVST does not watch the keyboard
+  at all.
 - Scans all standard VST3 locations (Program Files, %LOCALAPPDATA%, VST3_PATH); **add custom
   VST3 folders** via “Manage VST3 Folders → Add folder...” Scanning runs **in the background**
   (window opens instantly) in isolated helper processes - plugin metadata is read without

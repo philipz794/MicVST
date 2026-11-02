@@ -54,8 +54,9 @@ Hotkey hotkeyFromKeyCode (int juceKeyCode, bool ctrl, bool alt, bool shift, bool
     if (shift) mods |= modShift;
     if (win)   mods |= modWin;
 
-    if (mods == 0) return {};
-
+    // mods == 0 ist erlaubt. Der Aufrufer sollte den Nutzer aber darauf hinweisen, dass
+    // eine Taste ohne Modifier auch beim normalen Tippen in anderen Programmen ausloest
+    // (siehe Hotkey::isModifierless).
     if ((juceKeyCode & juceExtendedKeyModifier) != 0)
     {
         const int vk = juceKeyCode & 0xffff;

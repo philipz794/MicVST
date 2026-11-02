@@ -19,6 +19,12 @@ struct Hotkey
     bool isSet() const { return key != 0; }
     bool operator== (const Hotkey& o) const { return mods == o.mods && key == o.key; }
 
+    // Ohne Modifier: löst auch beim normalen Tippen in anderen Programmen aus, weil MicVST
+    // Tasten nur beobachtet und nie verschluckt (siehe GlobalHotkeys). Bei Buchstaben und
+    // Ziffern ist das fast immer unerwünscht -- die UI fragt deshalb nach und markiert
+    // solche Hotkeys.
+    bool isModifierless() const { return isSet() && mods == 0; }
+
     // Anzeigeform, z. B. "Ctrl+Shift+F5". Leer, wenn nicht gesetzt.
     juce::String toDisplayString() const;
 };
@@ -27,9 +33,7 @@ struct Hotkey
 // die Modifier kommen einzeln herein, damit diese Umrechnung in der Core-Library liegen
 // (und getestet werden) kann, ohne juce_gui_basics zu brauchen.
 //
-// Liefert einen UNGESETZTEN Hotkey, wenn
-//   - kein Modifier gedrückt ist: RegisterHotKey auf eine nackte Taste würde sie systemweit
-//     abfangen, der Nutzer könnte dann z. B. kein "k" mehr tippen;
+// Modifier sind optional (siehe isModifierless). Liefert einen UNGESETZTEN Hotkey, wenn
 //   - die Taste nicht unterstützt wird. Erlaubt sind A-Z, 0-9, F1-F12 und der komplette
 //     Ziffernblock (Num0-Num9 sowie + - * / , .). Alles andere (Pfeile, Enter, Tab, ...)
 //     wäre als globaler Hotkey entweder unbrauchbar oder würde die Bedienung anderer

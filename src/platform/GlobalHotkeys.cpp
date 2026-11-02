@@ -1,106 +1,71 @@
 // JUCE-Header BEWUSST vor <windows.h> (siehe Kommentar in Main.cpp).
 #include "platform/GlobalHotkeys.h"
+#include <juce_events/juce_events.h>   // MessageManager::callAsync
 
 #if JUCE_WINDOWS
  #include <windows.h>
 
 namespace
 {
-    constexpr const wchar_t* hotkeyWindowClass = L"MicVSTHotkeyWindow";
+    // Der Hook-Callback bekommt keinen eigenen Kontextzeiger, also muss die Instanz
+    // statisch erreichbar sein. MicVST hat genau eine (PluginListView besitzt sie).
+    GlobalHotkeys* hookOwner = nullptr;
 
-    // Jede Instanz haengt sich selbst ans Fenster (GWLP_USERDATA), damit die WndProc den
-    // Callback findet. MicVST hat nur eine Instanz, aber so bleibt es sauber.
-    LRESULT CALLBACK hotkeyWndProc (HWND h, UINT msg, WPARAM w, LPARAM l)
+    // Welche Modifier sind JETZT gedrueckt? Als Win32-Bits, damit sie direkt mit
+    // Hotkey::mods vergleichbar sind.
+    int heldModifiers()
     {
-        if (msg == WM_HOTKEY)
-            if (auto* self = (GlobalHotkeys*) GetWindowLongPtr (h, GWLP_USERDATA))
-                if (self->onHotkey)
-                    { self->onHotkey ((int) w); return 0; }
+        int mods = 0;
+        if (GetAsyncKeyState (VK_CONTROL) & 0x8000) mods |= 0x0002;   // MOD_CONTROL
+        if (GetAsyncKeyState (VK_MENU)    & 0x8000) mods |= 0x0001;   // MOD_ALT
+        if (GetAsyncKeyState (VK_SHIFT)   & 0x8000) mods |= 0x0004;   // MOD_SHIFT
+        if ((GetAsyncKeyState (VK_LWIN) & 0x8000) || (GetAsyncKeyState (VK_RWIN) & 0x8000))
+            mods |= 0x0008;                                           // MOD_WIN
+        return mods;
+    }
 
-        return DefWindowProc (h, msg, w, l);
+    LRESULT CALLBACK lowLevelKeyboardProc (int code, WPARAM wParam, LPARAM lParam)
+    {
+        // WICHTIG: immer durchreichen und nie etwas verschlucken -- dieser Hook beobachtet
+        // nur. Und er muss schnell zurueckkehren, sonst bremst er die Tastatureingabe des
+        // ganzen Systems; die eigentliche Arbeit laeuft daher per callAsync.
+        if (code == HC_ACTION && hookOwner != nullptr)
+        {
+            const auto* info = (const KBDLLHOOKSTRUCT*) lParam;
+            const bool isDown = (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN);
+            const bool isUp   = (wParam == WM_KEYUP   || wParam == WM_SYSKEYUP);
+
+            if ((isDown || isUp) && info != nullptr)
+                hookOwner->handleHookedKey ((int) info->vkCode, isDown);
+        }
+
+        return CallNextHookEx (nullptr, code, wParam, lParam);
     }
 }
 #endif
 
-GlobalHotkeys::GlobalHotkeys()
-{
-#if JUCE_WINDOWS
-    static bool classRegistered = false;
-    if (! classRegistered)
-    {
-        WNDCLASSEXW wc {};
-        wc.cbSize        = sizeof (wc);
-        wc.lpfnWndProc   = hotkeyWndProc;
-        wc.hInstance     = (HINSTANCE) juce::Process::getCurrentModuleInstanceHandle();
-        wc.lpszClassName = hotkeyWindowClass;
-        classRegistered = (RegisterClassExW (&wc) != 0);
-    }
-
-    // HWND_MESSAGE: unsichtbares Fenster, das nur Nachrichten empfaengt -- taucht in keiner
-    // Taskleiste und keinem Alt-Tab auf.
-    hwnd = CreateWindowExW (0, hotkeyWindowClass, L"", 0, 0, 0, 0, 0,
-                            HWND_MESSAGE, nullptr,
-                            (HINSTANCE) juce::Process::getCurrentModuleInstanceHandle(), nullptr);
-
-    if (hwnd != nullptr)
-        SetWindowLongPtr ((HWND) hwnd, GWLP_USERDATA, (LONG_PTR) this);
-    else
-        juce::Logger::writeToLog ("Hotkeys: konnte kein Message-Window anlegen");
-#endif
-}
+GlobalHotkeys::GlobalHotkeys() = default;
 
 GlobalHotkeys::~GlobalHotkeys()
 {
-#if JUCE_WINDOWS
-    if (hwnd != nullptr)
-    {
-        for (auto id : registered)
-            UnregisterHotKey ((HWND) hwnd, id);
-
-        // USERDATA loeschen, bevor das Fenster stirbt: eine noch in der Queue liegende
-        // WM_HOTKEY darf nicht auf das halb zerstoerte Objekt zurueckrufen.
-        SetWindowLongPtr ((HWND) hwnd, GWLP_USERDATA, 0);
-        DestroyWindow ((HWND) hwnd);
-        hwnd = nullptr;
-    }
-#endif
-    registered.clear();
+    current.clear();
+    updateKeyboardHook();   // entfernt den Hook, da jetzt keine Bindung mehr ihn braucht
 }
 
 juce::Array<int> GlobalHotkeys::setBindings (const juce::Array<Hotkey>& bindings)
 {
+    current = bindings;
+    heldKeys.clear();
+    updateKeyboardHook();
+
     juce::Array<int> failed;
 
 #if JUCE_WINDOWS
-    if (hwnd == nullptr)
-    {
+    // Einziger Fehlerfall: der Hook liess sich nicht installieren -> kein Hotkey geht.
+    if (hook == nullptr)
         for (int i = 0; i < bindings.size(); ++i)
             if (bindings[i].isSet())
                 failed.add (i);
-        return failed;
-    }
-
-    for (auto id : registered)
-        UnregisterHotKey ((HWND) hwnd, id);
-    registered.clear();
-
-    for (int i = 0; i < bindings.size(); ++i)
-    {
-        const auto& hk = bindings[i];
-        if (! hk.isSet())
-            continue;
-
-        // MOD_NOREPEAT: Halten der Taste soll nicht hunderte Umschaltungen ausloesen.
-        // Die Hotkey-ID ist der Ketten-Index, damit WM_HOTKEY direkt die Zeile benennt.
-        if (RegisterHotKey ((HWND) hwnd, i, (UINT) hk.mods | 0x4000, (UINT) hk.key))
-            registered.add (i);
-        else
-            failed.add (i);
-    }
-
-    if (! failed.isEmpty())
-        juce::Logger::writeToLog ("Hotkeys: " + juce::String (failed.size())
-                                  + " Kombination(en) bereits von einem anderen Programm belegt");
 #else
     for (int i = 0; i < bindings.size(); ++i)
         if (bindings[i].isSet())
@@ -108,4 +73,73 @@ juce::Array<int> GlobalHotkeys::setBindings (const juce::Array<Hotkey>& bindings
 #endif
 
     return failed;
+}
+
+void GlobalHotkeys::updateKeyboardHook()
+{
+#if JUCE_WINDOWS
+    bool needed = false;
+    for (auto& hk : current)
+        if (hk.isSet())
+            { needed = true; break; }
+
+    if (needed && hook == nullptr)
+    {
+        hookOwner = this;
+        hook = SetWindowsHookExW (WH_KEYBOARD_LL, lowLevelKeyboardProc,
+                                  (HINSTANCE) juce::Process::getCurrentModuleInstanceHandle(), 0);
+        if (hook == nullptr)
+        {
+            hookOwner = nullptr;
+            juce::Logger::writeToLog ("Hotkeys: Tastatur-Hook konnte nicht installiert werden"
+                                      " -- Hotkeys sind ohne Funktion");
+        }
+        else
+        {
+            juce::Logger::writeToLog ("Hotkeys: Tastatur-Hook aktiv");
+        }
+    }
+    else if (! needed && hook != nullptr)
+    {
+        UnhookWindowsHookEx ((HHOOK) hook);
+        hook = nullptr;
+        hookOwner = nullptr;
+        juce::Logger::writeToLog ("Hotkeys: Tastatur-Hook entfernt (kein Hotkey mehr gebunden)");
+    }
+#endif
+}
+
+void GlobalHotkeys::handleHookedKey (int vk, bool isDown)
+{
+#if JUCE_WINDOWS
+    if (! isDown)
+    {
+        heldKeys.removeAllInstancesOf (vk);
+        return;
+    }
+
+    // Tastenwiederholung: Windows schickt beim Halten laufend WM_KEYDOWN. Nur die erste
+    // Flanke zaehlt, sonst wuerde ein gehaltenes "F9" das Plugin hunderte Male umschalten.
+    if (heldKeys.contains (vk))
+        return;
+
+    // Modifier muessen EXAKT passen: F9 darf nicht auf Ctrl+F9 reagieren und umgekehrt.
+    const int mods = heldModifiers();
+
+    for (int i = 0; i < current.size(); ++i)
+    {
+        if (! current[i].isSet() || current[i].key != vk || current[i].mods != mods)
+            continue;
+
+        heldKeys.add (vk);
+
+        // Aus dem Hook heraus nichts Aufwendiges tun: der blockiert sonst die
+        // Tastatureingabe des ganzen Systems.
+        if (onHotkey)
+            juce::MessageManager::callAsync ([cb = onHotkey, i] { cb (i); });
+        return;
+    }
+#else
+    juce::ignoreUnused (vk, isDown);
+#endif
 }

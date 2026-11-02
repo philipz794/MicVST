@@ -7,7 +7,9 @@
 //   - Drag-Handle (Punkte) zum Umsortieren per Drag&Drop,
 //   - Plugin-Name (Doppelklick öffnet den Editor),
 //   - gemeldete Latenz des Plugins (getLatencySamples),
-//   - Hotkey-Feld (klicken, dann Tastenkombination drücken; Esc löscht),
+//   - Hotkey-Feld (klicken, dann Taste/Kombination drücken; Esc löscht). Rot umrandet =
+//     von einem anderen Programm belegt, gelb = ohne Modifier (löst daher auch beim
+//     normalen Tippen in anderen Programmen aus),
 //   - Bypass-Schalter,
 //   - Mülleimer-Icon zum Entfernen.
 // Oben ein "+ Plugin"-Button (öffnet den Such-Picker; enthält auch die Built-ins).
@@ -34,7 +36,8 @@ private:
     void requestMove (int from, int to);
     void toggleBypass (int index);
     void setHotkey (int index, const Hotkey&);   // setzt/löscht und registriert neu
-    void applyHotkeyBindings();                  // Kette -> RegisterHotKey, Konflikte markieren
+    void applyHotkeyBindings();                  // Kette -> Registrierung, Konflikte markieren
+    void confirmModifierlessHotkey (int index, const Hotkey&);   // Rückfrage, dann setHotkey
 
     // Hotkey-Feld einer Zeile. Klick schaltet in den Aufnahmemodus: die naechste
     // Tastenkombination wird uebernommen, Esc loescht, Fokusverlust bricht ab.
