@@ -39,10 +39,31 @@ PluginListView::HotkeyButton::HotkeyButton (PluginListView& ownerIn, int idx)
 {
     setWantsKeyboardFocus (true);
     conflicted = owner.conflictingHotkeys.contains (index);
-    setTooltip ("Global hotkey to bypass this plugin - click, then press a key or "
-                "combination (Esc clears). Letters, digits, F1-F12 and the numeric keypad "
-                "are accepted. A key without Ctrl/Alt/Shift/Win also fires while you use "
-                "it in other applications.");
+
+    // Der Tooltip nennt den gesetzten Hotkey ausgeschrieben: lange Kombinationen wie
+    // "Ctrl+Shift+Num+" passen nicht ins Feld und werden dort abgekuerzt.
+    const auto& es = owner.engine.getChain().entries();
+    const auto hk = juce::isPositiveAndBelow (index, (int) es.size()) ? es[(size_t) index].hotkey
+                                                                      : Hotkey {};
+    juce::String tip;
+    if (hk.isSet())
+    {
+        tip << "Hotkey: " << hk.toDisplayString() << " - toggles bypass for this plugin "
+            << "from anywhere.\n";
+        if (hk.isModifierless())
+            tip << "No modifier key, so it also fires while you use this key in other "
+                   "applications.\n";
+        if (conflicted)
+            tip << "Not working: MicVST could not watch the keyboard.\n";
+        tip << "\nClick and press another key to change it, or Esc to clear it.";
+    }
+    else
+    {
+        tip << "Global hotkey to bypass this plugin - click, then press a key or combination. "
+            << "Letters, digits, F1-F12 and the numeric keypad are accepted, with or without "
+            << "Ctrl/Alt/Shift/Win. Esc clears.";
+    }
+    setTooltip (tip);
     onClick = [this]
     {
         // Waehrend der Aufnahme die eigenen Hotkeys abmelden: sonst wuerde das Druecken
@@ -85,8 +106,10 @@ void PluginListView::HotkeyButton::paintButton (juce::Graphics& g, bool highligh
     g.setColour (capturing ? juce::Colours::black
                            : (hk.isSet() ? juce::Colours::white : juce::Colours::grey));
     g.setFont (juce::Font (juce::FontOptions (11.0f)));
+    // Ellipse an: eine lange Kombination ("Ctrl+Shift+Num+") passt nicht ins Feld, und ein
+    // sichtbares "..." sagt das -- ausgeschrieben steht sie im Tooltip.
     g.drawText (capturing ? "press..." : (hk.isSet() ? hk.toDisplayString() : "hotkey"),
-                getLocalBounds(), juce::Justification::centred, false);
+                getLocalBounds().reduced (3, 0), juce::Justification::centred, true);
 }
 
 bool PluginListView::HotkeyButton::keyPressed (const juce::KeyPress& kp)
@@ -100,10 +123,16 @@ bool PluginListView::HotkeyButton::keyPressed (const juce::KeyPress& kp)
         return true;
     }
 
+    // Den physisch gedrueckten Virtual-Key und die echten Modifier direkt abfragen, statt
+    // JUCEs Tastencode zu uebersetzen: JUCE liefert fuer die meisten druckbaren Tasten das
+    // ZEICHEN (Numpad-"+" kommt als '+' an, nicht als VK_ADD), und juce::ModifierKeys kennt
+    // die Windows-Taste nicht. Nur wenn das fehlschlaegt, auf JUCEs Code zurueckfallen.
+    const int vk = pressedHotkeyVk();
     const auto m = kp.getModifiers();
-    const auto hk = hotkeyFromKeyCode (kp.getKeyCode(), m.isCtrlDown(), m.isAltDown(),
-                                       m.isShiftDown(),
-                                       m.isCommandDown() && ! m.isCtrlDown() /* Windows-Taste */);
+    const auto hk = vk != 0
+        ? hotkeyFromVirtualKey (vk, heldHotkeyModifiers())
+        : hotkeyFromKeyCode (kp.getKeyCode(), m.isCtrlDown(), m.isAltDown(), m.isShiftDown(), false);
+
     if (! hk.isSet())
         return true;   // unbrauchbare Taste: im Aufnahmemodus bleiben, nichts aendern
 
@@ -164,7 +193,9 @@ void PluginListView::Row::resized()
     r.removeFromRight (4);
     bypassBtn.setBounds (r.removeFromRight (80));
     r.removeFromRight (4);
-    hotkeyBtn.setBounds (r.removeFromRight (74));
+    // 92 px fassen die gaengigen Kombinationen bis "Ctrl+Shift+F12"; laengeres wird
+    // abgekuerzt und steht im Tooltip.
+    hotkeyBtn.setBounds (r.removeFromRight (92));
 }
 
 void PluginListView::Row::paint (juce::Graphics& g)
