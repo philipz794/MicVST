@@ -1,4 +1,5 @@
 #include <juce_core/juce_core.h>
+#include <iostream>
 #include "audio/Metering.h"
 
 // Smoke-Test: beweist, dass der UnitTestRunner läuft.
@@ -150,9 +151,20 @@ struct PersistenceTest : juce::UnitTest
 };
 static PersistenceTest persistenceTest;
 
+// JUCEs Logger landet auf Windows in OutputDebugString und ist damit weder im Terminal
+// noch im CI-Log zu sehen -- ein fehlgeschlagener Test meldete sich nur über den Exit-Code.
+// Darum die Meldungen zusätzlich nach stdout.
+struct PrintingTestRunner : juce::UnitTestRunner
+{
+    void logMessage (const juce::String& message) override
+    {
+        std::cout << message << std::endl;
+    }
+};
+
 int main (int, char**)
 {
-    juce::UnitTestRunner runner;
+    PrintingTestRunner runner;
     runner.setAssertOnFailure (false);
     runner.runAllTests();
 
