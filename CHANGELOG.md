@@ -158,6 +158,7 @@ project follows [Semantic Versioning](https://semver.org/).
 - Portable, statically linked `.exe` (no installer, no Visual C++ Redistributable).
 - GitHub Actions CI: build + unit tests on every push/PR, release build on tag.
 
+[1.2.0]: https://github.com/philipz794/MicVST/releases/tag/v1.2.0
 [1.1.1]: https://github.com/philipz794/MicVST/releases/tag/v1.1.1
 [1.1.0]: https://github.com/philipz794/MicVST/releases/tag/v1.1.0
 [1.0.3]: https://github.com/philipz794/MicVST/releases/tag/v1.0.3
