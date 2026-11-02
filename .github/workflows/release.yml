@@ -33,6 +33,8 @@ jobs:
           body: |
             **MicVST ${{ github.ref_name }}** - portable Windows build (x64, statically linked; no installer, no Visual C++ Redistributable needed).
 
+            What changed: see the [changelog](https://github.com/philipz794/MicVST/blob/main/CHANGELOG.md).
+
             **Requires a virtual audio cable** - the free [VB-Cable](https://vb-audio.com/Cable/) is recommended (auto-detected). See the [README](https://github.com/philipz794/MicVST#readme) for setup.
 
             The `.exe` is unsigned, so Windows SmartScreen may warn - *More info → Run anyway*.

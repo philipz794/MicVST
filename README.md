@@ -49,6 +49,9 @@ recommended - MicVST detects it automatically. VoiceMeeter and Virtual Audio Cab
      (before it the chain runs mono = less CPU),
    - drag rows by the **handle on the left** to reorder; the **trash icon on the right** removes a
      plugin (with confirmation). Double-click a row to open the plugin’s editor.
+   - optionally give a plugin a **global hotkey**: click the *hotkey* field in its row and press a
+     key or combination. It then toggles that plugin’s bypass from anywhere - while you are in
+     your game, your DAW or a call, with MicVST sitting in the tray.
 4. **In your target app** (Discord/OBS/Zoom/…), select **CABLE Output** as the microphone.
 5. Done. Device and plugin settings (including each plugin’s state) are saved automatically.
 
@@ -68,24 +71,24 @@ boot (no window, engine running). For a stable setup, copy the `.exe` to a fixed
 - Horizontal **in/out level meters** with a dB scale
 - **Drag-to-reorder** plugin list, per-row bypass, remove with confirmation, per-plugin editor
   windows
-- **Global hotkeys** to toggle individual plugins: click the hotkey field in a plugin row, then
-  press a key or combination (letters, digits, F1-F12, numeric keypad; Esc clears). Works while
-  MicVST sits in the tray and another app has focus, and the hotkey moves with the plugin when
-  you reorder the chain. MicVST only *watches* for the key and never takes it away from anything
-  else - bind Ctrl+C and copying still works. The flip side is that a key without a modifier also
-  fires while you use it elsewhere, so those are outlined in yellow and ask for confirmation
-  first. Nothing is bound by default, and with no hotkey set MicVST does not watch the keyboard
-  at all.
+- **Global hotkeys** to toggle individual plugins, working while MicVST sits in the tray and
+  another app has focus. Click the hotkey field in a plugin row and press a key or combination -
+  letters, digits, F1-F12 and the numeric keypad, with or without Ctrl/Alt/Shift/Win; Esc clears.
+  The hotkey moves with the plugin when you reorder the chain.
+  MicVST only *watches* for the key and never claims it, so binding something like Ctrl+C does
+  not stop copying from working. A key without a modifier therefore also fires while you use it
+  elsewhere - MicVST asks before accepting one and marks it yellow. Nothing is bound by default,
+  and with no hotkey set MicVST does not watch the keyboard at all.
 - Scans all standard VST3 locations (Program Files, %LOCALAPPDATA%, VST3_PATH); **add custom
   VST3 folders** via “Manage VST3 Folders → Add folder...” Scanning runs **in the background**
   (window opens instantly) in isolated helper processes - plugin metadata is read without
   loading each plugin, so even shell plugins that house hundreds of entries (Waves) scan in
   seconds. A plugin that crashes or hangs the scan is skipped (with a hint in the UI); you can
-  skip the current plugin
-  mid-scan or “Retry skipped plugins” (with a generous 10-minute timeout) for huge shell plugins
-  like Waves WaveShell. Results are cached, so later starts are instant. Plugins shipped as bundle
-  folders (Acustica, Minimal Audio, UADx, ...) are rescanned only when the plugin binary inside
-  the bundle changes, not when vendor background services write logs into it. “Reset app (clear all
+  skip the current plugin mid-scan, or use “Retry skipped plugins” to give them another go.
+  Every finished plugin is cached immediately, so closing MicVST mid-scan never loses the work
+  and later starts are instant. Plugins shipped as bundle folders (Acustica, Minimal Audio,
+  UADx, ...) are rescanned only when the plugin binary inside the bundle changes, not when
+  vendor background services write logs into it. “Reset app (clear all
   data)...” (also in the “Manage VST3 Folders” menu) deletes all settings and the plugin cache.
   “Rescan all plugins” (also in the “Manage VST3 Folders” menu) rebuilds the cache from scratch.
 - Persistent settings (`%APPDATA%\MicVST\config.xml`), low latency, silent **tray autostart**
