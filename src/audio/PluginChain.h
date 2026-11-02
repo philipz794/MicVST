@@ -1,6 +1,7 @@
 #pragma once
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "audio/GraphConnections.h"
+#include "state/Hotkey.h"
 #include <vector>
 
 // Verwaltet die geordnete VST3-Kette innerhalb eines AudioProcessorGraph.
@@ -16,7 +17,9 @@ public:
     // uniqueId: unterscheidet Plugins, die sich eine Datei teilen (Shell-Plugins wie
     // WaveShell bringen hunderte Typen hinter EINEM Pfad mit). 0 = internes Glied bzw.
     // aus einer Config vor Einführung des Feldes geladen.
+    // hotkey: liegt am Eintrag (wie bypassed), damit er beim Umsortieren mitwandert.
     struct Entry { NodeID node; juce::String fileOrId; bool bypassed = false; int uniqueId = 0;
+                   Hotkey hotkey;
                    bool isBuiltIn() const { return fileOrId.startsWith ("builtin:"); } };
 
     PluginChain (juce::AudioProcessorGraph& graph,
@@ -36,6 +39,7 @@ public:
     void removePlugin (int index);
     void movePlugin (int from, int to);
     void setBypass (int index, bool shouldBypass);
+    void setHotkey (int index, const Hotkey&);
 
     const std::vector<Entry>& entries() const { return chain; }
 

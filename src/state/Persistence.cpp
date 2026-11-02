@@ -6,7 +6,7 @@ namespace ids
         sr ("sampleRate"), userBuf ("userBufferSize"), folders ("pluginFolders"), window ("windowState"),
         updEnabled ("updateCheckEnabled"), updAsked ("updateCheckAsked"), updLast ("lastNotifiedVersion"),
         plugins ("plugins"), plugin ("plugin"), fileId ("fileOrId"), byp ("bypassed"), blob ("state"),
-        uid ("uniqueId");
+        uid ("uniqueId"), hkMods ("hotkeyMods"), hkKey ("hotkeyKey");
 }
 
 juce::ValueTree toValueTree (const MicVSTState& s)
@@ -29,6 +29,11 @@ juce::ValueTree toValueTree (const MicVSTState& s)
         pt.setProperty (ids::fileId, p.fileOrId, nullptr);
         pt.setProperty (ids::byp, p.bypassed, nullptr);
         pt.setProperty (ids::uid, p.uniqueId, nullptr);
+        if (p.hotkey.isSet())   // ungesetzt = Attribute weglassen, hält die config.xml schlank
+        {
+            pt.setProperty (ids::hkMods, p.hotkey.mods, nullptr);
+            pt.setProperty (ids::hkKey,  p.hotkey.key,  nullptr);
+        }
         pt.setProperty (ids::blob, p.state.toBase64Encoding(), nullptr);
         list.appendChild (pt, nullptr);
     }
@@ -61,6 +66,8 @@ MicVSTState fromValueTree (const juce::ValueTree& t)
         p.fileOrId = pt.getProperty (ids::fileId);
         p.bypassed = pt.getProperty (ids::byp, false);
         p.uniqueId = pt.getProperty (ids::uid, 0);   // fehlt in Configs vor v1.1.2
+        p.hotkey.mods = pt.getProperty (ids::hkMods, 0);
+        p.hotkey.key  = pt.getProperty (ids::hkKey,  0);
         p.state.fromBase64Encoding (pt.getProperty (ids::blob).toString());
         s.plugins.add (p);
     }

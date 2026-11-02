@@ -68,10 +68,17 @@ boot (no window, engine running). For a stable setup, copy the `.exe` to a fixed
 - Horizontal **in/out level meters** with a dB scale
 - **Drag-to-reorder** plugin list, per-row bypass, remove with confirmation, per-plugin editor
   windows
+- **Global hotkeys** to toggle individual plugins: click the hotkey field in a plugin row, then
+  press a combination (needs at least one of Ctrl/Alt/Shift/Win; Esc clears). It works while
+  MicVST sits in the tray and another app has focus. Nothing is bound by default, so MicVST
+  never takes a key away from your DAW unless you ask it to; a combination another program
+  already owns is marked in red.
 - Scans all standard VST3 locations (Program Files, %LOCALAPPDATA%, VST3_PATH); **add custom
   VST3 folders** via “Manage VST3 Folders → Add folder...” Scanning runs **in the background**
-  (window opens instantly) in isolated helper processes with a 120-second timeout - a plugin that
-  crashes or hangs the scan is skipped (with a hint in the UI); you can skip the current plugin
+  (window opens instantly) in isolated helper processes - plugin metadata is read without
+  loading each plugin, so even shell plugins that house hundreds of entries (Waves) scan in
+  seconds. A plugin that crashes or hangs the scan is skipped (with a hint in the UI); you can
+  skip the current plugin
   mid-scan or “Retry skipped plugins” (with a generous 10-minute timeout) for huge shell plugins
   like Waves WaveShell. Results are cached, so later starts are instant. Plugins shipped as bundle
   folders (Acustica, Minimal Audio, UADx, ...) are rescanned only when the plugin binary inside

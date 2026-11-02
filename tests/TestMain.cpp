@@ -162,6 +162,78 @@ struct PrintingTestRunner : juce::UnitTestRunner
     }
 };
 
+#include "state/Hotkey.h"
+
+struct HotkeyTest : juce::UnitTest
+{
+    HotkeyTest() : juce::UnitTest ("Hotkey") {}
+    void runTest() override
+    {
+        // Win32-Bits und -Keycodes, gegen die wir pruefen (winuser.h).
+        constexpr int modAlt = 1, modCtrl = 2, modShift = 4, modWin = 8;
+        constexpr int vkF1 = 0x70, vkF5 = 0x74, vkF12 = 0x7B;
+        // JUCE auf Windows: Sondertasten sind VK | 0x10000 (juce_Windowing_windows.cpp).
+        constexpr int ext = 0x10000;
+
+        beginTest ("letters and digits map straight onto their virtual key codes");
+        {
+            auto k = hotkeyFromKeyCode ('K', true, false, false, false);
+            expect (k.isSet());
+            expectEquals (k.mods, modCtrl);
+            expectEquals (k.key, (int) 'K');
+            expectEquals (k.toDisplayString(), juce::String ("Ctrl+K"));
+
+            // Kleinbuchstabe muss denselben VK ergeben -- VK_A ist 'A', nicht 'a'.
+            expectEquals (hotkeyFromKeyCode ('k', true, false, false, false).key, (int) 'K');
+            expectEquals (hotkeyFromKeyCode ('7', false, true, false, false).key, (int) '7');
+        }
+
+        beginTest ("function keys are translated out of JUCEs extended key range");
+        {
+            auto k = hotkeyFromKeyCode (vkF5 | ext, false, true, true, false);
+            expect (k.isSet());
+            expectEquals (k.key, vkF5);
+            expectEquals (k.mods, modAlt | modShift);
+            expectEquals (k.toDisplayString(), juce::String ("Alt+Shift+F5"));
+
+            expectEquals (hotkeyFromKeyCode (vkF1  | ext, true, false, false, false).key, vkF1);
+            expectEquals (hotkeyFromKeyCode (vkF12 | ext, true, false, false, false).key, vkF12);
+        }
+
+        beginTest ("a combination without any modifier is rejected");
+        {
+            // Sonst wuerde RegisterHotKey die nackte Taste systemweit abfangen.
+            expect (! hotkeyFromKeyCode ('K', false, false, false, false).isSet());
+            expect (! hotkeyFromKeyCode (vkF5 | ext, false, false, false, false).isSet());
+        }
+
+        beginTest ("unsupported keys are rejected");
+        {
+            constexpr int vkReturn = 0x0D, vkLeft = 0x25, vkF13 = 0x7C;
+            expect (! hotkeyFromKeyCode (vkReturn | ext, true, false, false, false).isSet());
+            expect (! hotkeyFromKeyCode (vkLeft   | ext, true, false, false, false).isSet());
+            expect (! hotkeyFromKeyCode (vkF13    | ext, true, false, false, false).isSet());
+            expect (! hotkeyFromKeyCode ('+', true, false, false, false).isSet());
+        }
+
+        beginTest ("all four modifiers survive the round trip");
+        {
+            auto k = hotkeyFromKeyCode ('A', true, true, true, true);
+            expectEquals (k.mods, modCtrl | modAlt | modShift | modWin);
+            expectEquals (k.toDisplayString(), juce::String ("Ctrl+Alt+Shift+Win+A"));
+        }
+
+        beginTest ("default hotkey is unset and renders as nothing");
+        {
+            Hotkey none;
+            expect (! none.isSet());
+            expect (none.toDisplayString().isEmpty());
+            expect (none == Hotkey {});
+        }
+    }
+};
+static HotkeyTest hotkeyTest;
+
 int main (int, char**)
 {
     PrintingTestRunner runner;

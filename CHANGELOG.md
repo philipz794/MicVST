@@ -6,6 +6,15 @@ project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- Global hotkeys to toggle individual plugins. Click the hotkey field in a plugin row and
+  press a combination (at least one of Ctrl/Alt/Shift/Win, plus a letter, digit or F1-F12;
+  Esc clears). The hotkey works while MicVST is in the tray and another application has
+  focus, and it moves with the plugin when you reorder the chain. Nothing is bound by
+  default - no hotkey set means nothing is registered with Windows, so MicVST cannot take a
+  key away from your DAW unless you ask it to. A combination another program already owns
+  is outlined in red.
+
 ### Changed
 - Plugin scanning no longer loads every single plugin in a file just to read its channel
   counts - the class metadata is read directly instead. Shell plugins get dramatically

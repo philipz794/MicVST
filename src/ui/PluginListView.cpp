@@ -34,7 +34,86 @@ void PluginListView::TrashButton::paintButton (juce::Graphics& g, bool highlight
 
 // ============================ Row ============================
 
-PluginListView::Row::Row (PluginListView& ownerIn, int idx) : owner (ownerIn), index (idx)
+PluginListView::HotkeyButton::HotkeyButton (PluginListView& ownerIn, int idx)
+    : juce::Button ("Hotkey"), owner (ownerIn), index (idx)
+{
+    setWantsKeyboardFocus (true);
+    conflicted = owner.conflictingHotkeys.contains (index);
+    setTooltip ("Global hotkey to bypass this plugin - click, then press a combination "
+                "(Esc clears). Needs at least one of Ctrl/Alt/Shift/Win.");
+    onClick = [this]
+    {
+        // WICHTIG: waehrend der Aufnahme unsere eigenen Hotkeys abmelden. Sonst faengt
+        // RegisterHotKey die Taste ab, bevor sie das Eingabefeld erreicht -- eine bereits
+        // belegte Kombination koennte man dann nie neu zuweisen, sie wuerde stattdessen
+        // ein Plugin umschalten.
+        capturing = true;
+        owner.hotkeys.setBindings ({});
+        grabKeyboardFocus();
+        repaint();
+    };
+}
+
+void PluginListView::HotkeyButton::paintButton (juce::Graphics& g, bool highlighted, bool)
+{
+    const auto& es = owner.engine.getChain().entries();
+    const auto hk = juce::isPositiveAndBelow (index, (int) es.size()) ? es[(size_t) index].hotkey
+                                                                      : Hotkey {};
+    auto b = getLocalBounds().toFloat().reduced (1.0f);
+
+    g.setColour (capturing ? juce::Colours::darkorange
+                           : (highlighted ? juce::Colour (0xff3a3a3a) : juce::Colour (0xff303030)));
+    g.fillRoundedRectangle (b, 3.0f);
+
+    if (conflicted && ! capturing)
+    {
+        g.setColour (juce::Colours::orangered);
+        g.drawRoundedRectangle (b, 3.0f, 1.0f);
+    }
+
+    g.setColour (capturing ? juce::Colours::black
+                           : (hk.isSet() ? juce::Colours::white : juce::Colours::grey));
+    g.setFont (juce::Font (juce::FontOptions (11.0f)));
+    g.drawText (capturing ? "press..." : (hk.isSet() ? hk.toDisplayString() : "hotkey"),
+                getLocalBounds(), juce::Justification::centred, false);
+}
+
+bool PluginListView::HotkeyButton::keyPressed (const juce::KeyPress& kp)
+{
+    if (! capturing) return false;
+
+    if (kp.getKeyCode() == juce::KeyPress::escapeKey)
+    {
+        capturing = false;
+        owner.setHotkey (index, {});   // loeschen (registriert anschliessend neu)
+        return true;
+    }
+
+    const auto m = kp.getModifiers();
+    const auto hk = hotkeyFromKeyCode (kp.getKeyCode(), m.isCtrlDown(), m.isAltDown(),
+                                       m.isShiftDown(),
+                                       m.isCommandDown() && ! m.isCtrlDown() /* Windows-Taste */);
+    if (! hk.isSet())
+        return true;   // unbrauchbare Taste: im Aufnahmemodus bleiben, nichts aendern
+
+    capturing = false;
+    owner.setHotkey (index, hk);
+    return true;
+}
+
+void PluginListView::HotkeyButton::focusLost (FocusChangeType)
+{
+    if (! capturing) return;
+
+    // Abgebrochen (woanders hingeklickt): nichts aendern, aber die abgemeldeten Hotkeys
+    // wieder registrieren.
+    capturing = false;
+    owner.applyHotkeyBindings();
+    repaint();
+}
+
+PluginListView::Row::Row (PluginListView& ownerIn, int idx)
+    : owner (ownerIn), index (idx), hotkeyBtn (ownerIn, idx)
 {
     const auto& es = owner.engine.getChain().entries();
     const bool bypassed = juce::isPositiveAndBelow (index, (int) es.size())
@@ -46,6 +125,8 @@ PluginListView::Row::Row (PluginListView& ownerIn, int idx) : owner (ownerIn), i
     bypassBtn.setColour (juce::TextButton::buttonOnColourId, juce::Colours::darkorange);
     bypassBtn.onClick = [this] { owner.toggleBypass (index); };
     addAndMakeVisible (bypassBtn);
+
+    addAndMakeVisible (hotkeyBtn);
 
     trashBtn.onClick = [this] { owner.requestRemove (index); };
     addAndMakeVisible (trashBtn);
@@ -59,6 +140,8 @@ void PluginListView::Row::resized()
     trashBtn.setBounds (r.removeFromRight (28));
     r.removeFromRight (4);
     bypassBtn.setBounds (r.removeFromRight (80));
+    r.removeFromRight (4);
+    hotkeyBtn.setBounds (r.removeFromRight (74));
 }
 
 void PluginListView::Row::paint (juce::Graphics& g)
@@ -78,9 +161,9 @@ void PluginListView::Row::paint (juce::Graphics& g)
         for (int cyn = 0; cyn < 3; ++cyn)
             g.fillEllipse ((float) (8 + cxn * 6), (float) (b.getCentreY() - 6 + cyn * 6), 2.6f, 2.6f);
 
-    // Latenz-Spalte links vom Bypass: gemeldete Plugin-Latenz in ms (Lookahead etc.).
+    // Latenz-Spalte links vom Hotkey-Feld: gemeldete Plugin-Latenz in ms (Lookahead etc.).
     constexpr int latW = 72;
-    const int latRight = bypassBtn.getX() - 8;
+    const int latRight = hotkeyBtn.getX() - 8;
     const int latLeft  = latRight - latW;
 
     juce::String latText;
@@ -173,14 +256,21 @@ PluginListView::PluginListView (AudioEngine& e) : engine (e)
     };
     engine.onScanFinished = [this]
     {
-        rebuildRows();   // Kette kann per deferred Restore gerade erst entstanden sein
+        applyHotkeyBindings();   // Kette kann per deferred Restore gerade erst entstanden sein
+        rebuildRows();
         updateScanUi();
     };
     // Dasselbe, aber mitten im laufenden Scan: die Kette steht schon, der Scan-Status
     // (Fortschrittsbalken, Skip-Button) bleibt unverändert -> kein updateScanUi.
-    engine.onChainRestored = [this] { rebuildRows(); };
+    engine.onChainRestored = [this] { applyHotkeyBindings(); rebuildRows(); };
+
+    // Hotkey drücken = dieses Plugin bypassen/aktivieren. Die Hotkey-ID ist der
+    // Ketten-Index; toggleBypass prüft die Grenzen selbst (die Kette kann sich zwischen
+    // Registrierung und Tastendruck geändert haben).
+    hotkeys.onHotkey = [this] (int index) { toggleBypass (index); };
     updateScanUi();
 
+    applyHotkeyBindings();   // gespeicherte Hotkeys der wiederhergestellten Kette anmelden
     rebuildRows();
     startTimer (500);   // Plugin-Latenz live halten (z. B. wenn ein Plugin Lookahead an-/abschaltet)
 }
@@ -252,7 +342,29 @@ void PluginListView::commitChange()
 {
     engine.rebuildGraph();
     engine.requestPersist();   // App persistiert den Gesamtzustand (nicht nur captureState)
+    // Vor rebuildRows: die Zeilen lesen conflictingHotkeys beim Erzeugen.
+    applyHotkeyBindings();
     rebuildRows();
+}
+
+void PluginListView::applyHotkeyBindings()
+{
+    juce::Array<Hotkey> bindings;
+    for (auto& e : engine.getChain().entries())
+        bindings.add (e.hotkey);
+    conflictingHotkeys = hotkeys.setBindings (bindings);
+}
+
+void PluginListView::setHotkey (int index, const Hotkey& hk)
+{
+    // Verzoegert wie toggleBypass/requestRemove: der Aufruf kommt aus dem HotkeyButton,
+    // und commitChange baut die Zeilen (also auch diesen Button) neu auf.
+    juce::MessageManager::callAsync ([this, index, hk]
+    {
+        if (! juce::isPositiveAndBelow (index, (int) engine.getChain().entries().size())) return;
+        engine.getChain().setHotkey (index, hk);
+        commitChange();
+    });
 }
 
 void PluginListView::requestRemove (int index)

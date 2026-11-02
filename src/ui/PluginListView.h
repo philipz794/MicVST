@@ -1,11 +1,13 @@
 #pragma once
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "audio/AudioEngine.h"
+#include "platform/GlobalHotkeys.h"
 
 // Plugin-Kette als Liste. Pro Zeile (von links nach rechts):
 //   - Drag-Handle (Punkte) zum Umsortieren per Drag&Drop,
 //   - Plugin-Name (Doppelklick öffnet den Editor),
 //   - gemeldete Latenz des Plugins (getLatencySamples),
+//   - Hotkey-Feld (klicken, dann Tastenkombination drücken; Esc löscht),
 //   - Bypass-Schalter,
 //   - Mülleimer-Icon zum Entfernen.
 // Oben ein "+ Plugin"-Button (öffnet den Such-Picker; enthält auch die Built-ins).
@@ -31,6 +33,23 @@ private:
     void requestRemove (int index);     // verzögertes Entfernen (Row löscht sich sonst selbst)
     void requestMove (int from, int to);
     void toggleBypass (int index);
+    void setHotkey (int index, const Hotkey&);   // setzt/löscht und registriert neu
+    void applyHotkeyBindings();                  // Kette -> RegisterHotKey, Konflikte markieren
+
+    // Hotkey-Feld einer Zeile. Klick schaltet in den Aufnahmemodus: die naechste
+    // Tastenkombination wird uebernommen, Esc loescht, Fokusverlust bricht ab.
+    struct HotkeyButton : juce::Button
+    {
+        explicit HotkeyButton (PluginListView& ownerIn, int idx);
+        void paintButton (juce::Graphics&, bool highlighted, bool down) override;
+        bool keyPressed (const juce::KeyPress&) override;
+        void focusLost (FocusChangeType) override;
+
+        PluginListView& owner;
+        int index;
+        bool capturing = false;
+        bool conflicted = false;   // Kombination ist von einem anderen Programm belegt
+    };
 
     // Per-Row gezeichneter Mülleimer-Button.
     struct TrashButton : juce::Button
@@ -55,6 +74,7 @@ private:
         PluginListView& owner;
         int index;
         juce::TextButton bypassBtn;
+        HotkeyButton hotkeyBtn;
         TrashButton trashBtn;
         bool dragging = false;
         int  grabOffsetY = 0;
@@ -84,4 +104,9 @@ private:
     juce::Component rowsHolder;          // Inhalt des Viewports (trägt die Zeilen)
     juce::OwnedArray<Row> rows;
     juce::OwnedArray<EditorWindow> editorWindows;
+
+    // Lebt so lange wie die View (und damit so lange wie die App) -- die Hotkeys muessen
+    // auch greifen, wenn das Fenster versteckt und MicVST nur im Tray ist.
+    GlobalHotkeys hotkeys;
+    juce::Array<int> conflictingHotkeys;
 };

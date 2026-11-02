@@ -29,6 +29,7 @@ add_library(MicVSTCore STATIC
     src/audio/ScanCoordinator.cpp
     src/audio/Vst3ClassScan.cpp
     src/state/Persistence.cpp
+    src/state/Hotkey.cpp
     src/state/PluginScanCache.cpp
     src/ui/PluginSearch.cpp
 )
@@ -62,6 +63,7 @@ target_sources(MicVST PRIVATE
     src/ui/MainComponent.cpp
     src/ui/DevicePanel.cpp
     src/ui/PluginListView.cpp
+    src/platform/GlobalHotkeys.cpp
     src/ui/PluginPicker.cpp
     src/ui/LevelMeterComponent.cpp
     src/ui/TrayIcon.cpp

@@ -1,6 +1,7 @@
 #pragma once
 #include <juce_data_structures/juce_data_structures.h>
 #include <juce_core/juce_core.h>
+#include "state/Hotkey.h"
 
 struct PluginEntryState
 {
@@ -11,6 +12,9 @@ struct PluginEntryState
     // hunderte Typen hinter EINEM Pfad). 0 = internes Glied oder Config aus einer Version
     // vor Einführung des Feldes -> findTypeForEntry nimmt dann den ersten Treffer der Datei.
     int uniqueId = 0;
+    // Globaler Hotkey, der dieses Plugin bypassed/aktiviert. Default ungesetzt -> es wird
+    // nichts beim System registriert (siehe Hotkey.h).
+    Hotkey hotkey;
 };
 
 struct MicVSTState

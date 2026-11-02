@@ -152,6 +152,12 @@ void PluginChain::setBypass (int index, bool b)
         node->setBypassed (b);
 }
 
+void PluginChain::setHotkey (int index, const Hotkey& hk)
+{
+    if (! juce::isPositiveAndBelow (index, (int) chain.size())) return;
+    chain[(size_t) index].hotkey = hk;
+}
+
 void PluginChain::rebuildConnections()
 {
     // Alle bestehenden Verbindungen lösen, dann kanalbewusst neu setzen.

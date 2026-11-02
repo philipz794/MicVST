@@ -336,6 +336,7 @@ MicVSTState AudioEngine::captureState()
         p.fileOrId = e.fileOrId;
         p.bypassed = e.bypassed;
         p.uniqueId = e.uniqueId;   // nötig, um Plugins derselben Shell zu unterscheiden
+        p.hotkey   = e.hotkey;
         if (auto* node = graph.getNodeForId (e.node))
         {
             auto* proc = node->getProcessor();
@@ -378,7 +379,9 @@ void AudioEngine::restoreChain (const juce::Array<PluginEntryState>& plugins)
         {
             if (p.fileOrId == PluginChain::monoToStereoId) pluginChain->addMonoToStereo();
             else                                           pluginChain->addStereoToMono();
-            pluginChain->setBypass ((int) pluginChain->entries().size() - 1, p.bypassed);
+            const int builtinIdx = (int) pluginChain->entries().size() - 1;
+            pluginChain->setBypass (builtinIdx, p.bypassed);
+            pluginChain->setHotkey (builtinIdx, p.hotkey);
             continue;
         }
 
@@ -394,6 +397,7 @@ void AudioEngine::restoreChain (const juce::Array<PluginEntryState>& plugins)
             if (auto* node = graph.getNodeForId (pluginChain->entries()[(size_t) idx].node))
                 node->getProcessor()->setStateInformation (p.state.getData(), (int) p.state.getSize());
             pluginChain->setBypass (idx, p.bypassed);
+            pluginChain->setHotkey (idx, p.hotkey);
         }
         else juce::Logger::writeToLog ("Plugin-Load: " + err);
     }
