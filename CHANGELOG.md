@@ -4,6 +4,43 @@ All notable changes to MicVST are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 project follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- Plugin scanning no longer loads every single plugin in a file just to read its channel
+  counts - the class metadata is read directly instead. Shell plugins get dramatically
+  faster: WaveShell1-VST3 17.1 (347 Waves plugins) went from 178 s to 2.3 s. Files that
+  this fast path cannot handle still fall back to the previous behaviour.
+- Scan timeout per plugin raised from 120 s to 600 s. The old limit was right at the edge
+  for Waves (~90 s warm, 178 s cold), so a cold first scan silently skipped the whole
+  WaveShell - and a factory reset put users back in that state every time.
+
+### Fixed
+- Quitting MicVST while the plugin scan was still running threw away the whole scan, so
+  the next start scanned everything again - for large collections (or with slow shell
+  plugins like Waves WaveShell in the list) the scan never got the chance to finish and
+  every start rescanned from scratch. Scan results are now saved after each file, so a
+  quit at worst loses the plugin currently being scanned.
+- The plugin chain no longer waits for the whole scan: it is restored as soon as its own
+  plugins have been found. Previously a chain containing a not-yet-scanned plugin stayed
+  empty (no microphone processing) for the entire scan, and was never restored at all if
+  the scan got interrupted.
+- "Retry skipped plugins" no longer forgets the plugins it has not reached yet when
+  MicVST is quit mid-retry; each skip entry is now cleared only once its plugin has
+  actually been retried.
+- Plugins that ship as a bundle folder without a `moduleinfo.json` were rescanned on
+  every single start, forever: they were stored under their inner binary's path while the
+  scanner looked them up under the bundle path, so the cache never matched. This was a
+  second, independent cause of the endless-rescan reports.
+- Plugins housed in a shell file (all Waves plugins share one WaveShell) are now told
+  apart in a saved chain. Previously only the file path was stored, so after a restart
+  the chain got whichever plugin of that shell came first - with another plugin's saved
+  settings applied to it.
+
+### Internal
+- The unit test runner prints its results to stdout; failures were previously only
+  visible via the process exit code.
+
 ## [1.1.1] - 2026-07-27
 
 ### Added
