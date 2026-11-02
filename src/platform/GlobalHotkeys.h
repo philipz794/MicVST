@@ -27,6 +27,17 @@
 // Virenscanner heuristisch darauf anschlagen. Er wertet ausschliesslich den
 // Virtual-Key-Code gegen die gebundene Liste aus; Tastendruecke werden nicht
 // gespeichert, protokolliert oder weitergegeben.
+// Welcher als Hotkey taugliche Virtual-Key ist JETZT physisch gedrueckt? 0 = keiner.
+// Beim Aufnehmen einer Tastenkombination gefragt, statt JUCEs Tastencode zu uebersetzen:
+// JUCE liefert fuer die meisten druckbaren Tasten das Zeichen statt des Virtual-Keys, und
+// Numpad-"+" kaeme so als '+' an. Der physische VK ist eindeutig und layoutunabhaengig.
+int pressedHotkeyVk();
+
+// Welche Modifier sind JETZT gedrueckt, als MOD_*-Bits. Ebenfalls direkt abgefragt, denn
+// juce::ModifierKeys kennt die Windows-Taste nicht (und commandModifier ist auf Windows
+// identisch mit ctrlModifier, laesst sich also nicht dafuer missbrauchen).
+int heldHotkeyModifiers();
+
 class GlobalHotkeys
 {
 public:

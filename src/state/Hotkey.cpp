@@ -46,6 +46,23 @@ juce::String Hotkey::toDisplayString() const
     return parts.joinIntoString ("+");
 }
 
+bool isAllowedHotkeyVk (int vk)
+{
+    if (vk >= 'A' && vk <= 'Z')             return true;   // VK_A..VK_Z
+    if (vk >= '0' && vk <= '9')             return true;   // VK_0..VK_9
+    if (vk >= vkF1 && vk <= vkF12)          return true;
+    if (vk >= vkNumpad0 && vk <= vkDivide)  return true;
+    return false;
+}
+
+Hotkey hotkeyFromVirtualKey (int vk, int mods)
+{
+    // mods == 0 ist erlaubt. Der Aufrufer sollte den Nutzer aber darauf hinweisen, dass
+    // eine Taste ohne Modifier auch beim normalen Tippen in anderen Programmen ausloest
+    // (siehe Hotkey::isModifierless).
+    return isAllowedHotkeyVk (vk) ? Hotkey { mods, vk } : Hotkey {};
+}
+
 Hotkey hotkeyFromKeyCode (int juceKeyCode, bool ctrl, bool alt, bool shift, bool win)
 {
     int mods = 0;
@@ -54,24 +71,16 @@ Hotkey hotkeyFromKeyCode (int juceKeyCode, bool ctrl, bool alt, bool shift, bool
     if (shift) mods |= modShift;
     if (win)   mods |= modWin;
 
-    // mods == 0 ist erlaubt. Der Aufrufer sollte den Nutzer aber darauf hinweisen, dass
-    // eine Taste ohne Modifier auch beim normalen Tippen in anderen Programmen ausloest
-    // (siehe Hotkey::isModifierless).
+    // Extended-Codes tragen den Virtual-Key direkt (F-Tasten, Numpad-Ziffern).
     if ((juceKeyCode & juceExtendedKeyModifier) != 0)
-    {
-        const int vk = juceKeyCode & 0xffff;
+        return hotkeyFromVirtualKey (juceKeyCode & 0xffff, mods);
 
-        if (vk >= vkF1 && vk <= vkF12)             return Hotkey { mods, vk };
-        if (vk >= vkNumpad0 && vk <= vkDivide)     return Hotkey { mods, vk };
-
-        // Alles andere Extended -- auch KeyPress::numberPadDelete, das auf dem GETEILTEN
-        // VK_DELETE sitzt und sich von der normalen Entf-Taste nicht unterscheiden laesst.
-        return {};
-    }
-
+    // Sonst liefert JUCE ein Zeichen. Nur fuer Buchstaben und Ziffern ist das gleichzeitig
+    // der Virtual-Key (VK_A ist 'A', VK_0 ist '0'); bei allem anderen -- etwa Numpad-"+",
+    // das als '+' ankommt -- waere eine Umdeutung zum VK frei erfunden.
     const auto upper = juce::CharacterFunctions::toUpperCase ((juce::juce_wchar) juceKeyCode);
     if ((upper >= 'A' && upper <= 'Z') || (upper >= '0' && upper <= '9'))
-        return Hotkey { mods, (int) upper };
+        return hotkeyFromVirtualKey ((int) upper, mods);
 
     return {};
 }

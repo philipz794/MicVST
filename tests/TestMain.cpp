@@ -226,30 +226,69 @@ struct HotkeyTest : juce::UnitTest
             expect (! Hotkey {}.isModifierless());
         }
 
-        beginTest ("numpad keys are accepted, including the operators");
+        beginTest ("numpad keys come in as virtual keys, including the operators");
         {
+            // Der Hauptweg: der VK wird beim Aufnehmen physisch abgefragt. Genau das ist
+            // noetig, weil JUCE Numpad-"+" als Zeichen '+' meldet und nicht als VK_ADD --
+            // ueber hotkeyFromKeyCode waere die Taste also nicht zu bekommen.
             constexpr int vkNum0 = 0x60, vkNum5 = 0x65, vkMultiply = 0x6A, vkAdd = 0x6B,
                           vkSeparator = 0x6C, vkSubtract = 0x6D, vkDecimal = 0x6E, vkDivide = 0x6F;
 
-            auto plus = hotkeyFromKeyCode (vkAdd | ext, true, false, false, false);
+            auto plus = hotkeyFromVirtualKey (vkAdd, modCtrl);
             expect (plus.isSet());
             expectEquals (plus.key, vkAdd);
             expectEquals (plus.toDisplayString(), juce::String ("Ctrl+Num+"));
 
-            expectEquals (hotkeyFromKeyCode (vkSubtract | ext, true, false, false, false)
-                              .toDisplayString(), juce::String ("Ctrl+Num-"));
-            expectEquals (hotkeyFromKeyCode (vkMultiply | ext, true, false, false, false)
-                              .toDisplayString(), juce::String ("Ctrl+Num*"));
-            expectEquals (hotkeyFromKeyCode (vkDivide | ext, true, false, false, false)
-                              .toDisplayString(), juce::String ("Ctrl+Num/"));
-            expectEquals (hotkeyFromKeyCode (vkSeparator | ext, true, false, false, false)
-                              .toDisplayString(), juce::String ("Ctrl+Num,"));
-            expectEquals (hotkeyFromKeyCode (vkDecimal | ext, true, false, false, false)
-                              .toDisplayString(), juce::String ("Ctrl+Num."));
-            expectEquals (hotkeyFromKeyCode (vkNum0 | ext, true, false, false, false)
-                              .toDisplayString(), juce::String ("Ctrl+Num0"));
-            expectEquals (hotkeyFromKeyCode (vkNum5 | ext, false, true, false, false)
-                              .toDisplayString(), juce::String ("Alt+Num5"));
+            expectEquals (hotkeyFromVirtualKey (vkSubtract,  modCtrl).toDisplayString(), juce::String ("Ctrl+Num-"));
+            expectEquals (hotkeyFromVirtualKey (vkMultiply,  modCtrl).toDisplayString(), juce::String ("Ctrl+Num*"));
+            expectEquals (hotkeyFromVirtualKey (vkDivide,    modCtrl).toDisplayString(), juce::String ("Ctrl+Num/"));
+            expectEquals (hotkeyFromVirtualKey (vkSeparator, modCtrl).toDisplayString(), juce::String ("Ctrl+Num,"));
+            expectEquals (hotkeyFromVirtualKey (vkDecimal,   modCtrl).toDisplayString(), juce::String ("Ctrl+Num."));
+            expectEquals (hotkeyFromVirtualKey (vkNum0,      modCtrl).toDisplayString(), juce::String ("Ctrl+Num0"));
+            expectEquals (hotkeyFromVirtualKey (vkNum5,      modAlt ).toDisplayString(), juce::String ("Alt+Num5"));
+
+            // Ohne Modifier ebenfalls, und per Hook-Pfad markiert.
+            auto bare = hotkeyFromVirtualKey (vkAdd, 0);
+            expect (bare.isSet());
+            expect (bare.isModifierless());
+            expectEquals (bare.toDisplayString(), juce::String ("Num+"));
+        }
+
+        beginTest ("shift alone is a valid modifier");
+        {
+            // Erste Fassung erkannte die Windows-Taste ueber isCommandDown() && !isCtrlDown();
+            // auf Windows IST commandModifier aber ctrlModifier, der Ausdruck war immer
+            // falsch. Modifier werden jetzt direkt abgefragt -- hier der Vertrag dafuer.
+            auto k = hotkeyFromVirtualKey ('K', modShift);
+            expect (k.isSet());
+            expectEquals (k.mods, modShift);
+            expect (! k.isModifierless());
+            expectEquals (k.toDisplayString(), juce::String ("Shift+K"));
+
+            expectEquals (hotkeyFromVirtualKey (vkF5, modShift).toDisplayString(),
+                          juce::String ("Shift+F5"));
+            expectEquals (hotkeyFromVirtualKey (0x6B, modShift).toDisplayString(),
+                          juce::String ("Shift+Num+"));
+            expectEquals (hotkeyFromVirtualKey ('K', modWin).toDisplayString(),
+                          juce::String ("Win+K"));
+        }
+
+        beginTest ("the allowed virtual keys are exactly letters, digits, F1-F12 and the numpad");
+        {
+            expect (isAllowedHotkeyVk ('A'));  expect (isAllowedHotkeyVk ('Z'));
+            expect (isAllowedHotkeyVk ('0'));  expect (isAllowedHotkeyVk ('9'));
+            expect (isAllowedHotkeyVk (0x70)); expect (isAllowedHotkeyVk (0x7B));
+            expect (isAllowedHotkeyVk (0x60)); expect (isAllowedHotkeyVk (0x6F));
+
+            // 0x6F (VK_DIVIDE) grenzt lueckenlos an 0x70 (VK_F1) -- dazwischen ist nichts
+            // zu pruefen, der Block geht direkt in die F-Tasten ueber.
+            expect (! isAllowedHotkeyVk (0x7C));   // VK_F13
+            expect (! isAllowedHotkeyVk (0x5F));   // direkt unter VK_NUMPAD0
+            expect (! isAllowedHotkeyVk (0xBB));   // VK_OEM_PLUS (Haupttastatur)
+            expect (! isAllowedHotkeyVk (0x0D));   // VK_RETURN
+            expect (! isAllowedHotkeyVk (0x2E));   // VK_DELETE
+            expect (! isAllowedHotkeyVk (0x01));   // VK_LBUTTON -- Maus
+            expect (! hotkeyFromVirtualKey (0xBB, modCtrl).isSet());
         }
 
         beginTest ("unsupported keys are rejected");

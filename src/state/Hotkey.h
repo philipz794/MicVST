@@ -29,23 +29,29 @@ struct Hotkey
     juce::String toDisplayString() const;
 };
 
-// Aus einem Tastendruck einen Hotkey machen. juceKeyCode ist juce::KeyPress::getKeyCode();
-// die Modifier kommen einzeln herein, damit diese Umrechnung in der Core-Library liegen
-// (und getestet werden) kann, ohne juce_gui_basics zu brauchen.
+// Taugt dieser Virtual-Key als Hotkey? Erlaubt sind A-Z, 0-9, F1-F12 und der komplette
+// Ziffernblock (VK_NUMPAD0..9 sowie * + , - . /). Alles andere (Pfeile, Enter, Tab, ...)
+// wäre als globaler Hotkey entweder unbrauchbar oder würde die Bedienung anderer Programme
+// sabotieren.
 //
-// Modifier sind optional (siehe isModifierless). Liefert einen UNGESETZTEN Hotkey, wenn
-//   - die Taste nicht unterstützt wird. Erlaubt sind A-Z, 0-9, F1-F12 und der komplette
-//     Ziffernblock (Num0-Num9 sowie + - * / , .). Alles andere (Pfeile, Enter, Tab, ...)
-//     wäre als globaler Hotkey entweder unbrauchbar oder würde die Bedienung anderer
-//     Programme sabotieren.
+// Bewusst NICHT erlaubt sind die Satzzeichen der HAUPTTASTATUR (VK_OEM_PLUS & Co.): welche
+// Taste das ist und wie sie heißt, hängt vom Tastaturlayout ab, eine sinnvolle Beschriftung
+// wäre also nicht zu garantieren. Der Ziffernblock hat dieses Problem nicht.
 //
-// Bewusst NICHT erlaubt sind + - . , usw. der HAUPTTASTATUR. JUCE liefert für solche Tasten
-// das Zeichen selbst, und ein Zeichen ist kein Virtual-Key: '+' ist 0x2B, was als VK
-// VK_EXECUTE bedeutet -- wir würden also stillschweigend eine völlig andere Taste
-// registrieren. Die richtigen Codes (VK_OEM_PLUS & Co.) hängen zudem vom Tastaturlayout ab.
-// Der Ziffernblock hat dieses Problem nicht: seine VKs sind layoutunabhängig eindeutig.
-//
-// NumLock-Hinweis: Die Ziffern des Blocks melden bei AUSgeschaltetem NumLock andere Codes
+// NumLock-Hinweis: Die ZIFFERN des Blocks melden bei ausgeschaltetem NumLock andere Codes
 // (VK_END, VK_INSERT, ...), ein Hotkey auf Num5 greift dann nicht. Die Operatortasten
 // + - * / sind davon nicht betroffen und funktionieren immer.
+bool isAllowedHotkeyVk (int vk);
+
+// Hotkey aus einem Virtual-Key plus Modifier-Bits (MOD_*) bauen. Das ist der Hauptweg:
+// der VK wird beim Aufnehmen physisch abgefragt (siehe pressedHotkeyVk), nicht aus JUCEs
+// Tastencode übersetzt. Grund: JUCE liefert für die meisten druckbaren Tasten das ZEICHEN
+// statt des Virtual-Keys (juce_Windowing_windows.cpp, doKeyChar übersetzt den Scancode
+// zurück in das unmodifizierte Zeichen), und Numpad-"+" kommt so als '+' an, nicht als
+// VK_ADD -- ein Zeichen ist aber kein Virtual-Key und für den Vergleich im Hook unbrauchbar.
+Hotkey hotkeyFromVirtualKey (int vk, int mods);
+
+// Fallback, wenn der physische VK nicht ermittelt werden konnte: aus JUCEs Tastencode
+// ableiten. Deckt zuverlässig A-Z, 0-9, F1-F12 und die Numpad-Ziffern ab (für die JUCE
+// echte Extended-Codes liefert), nicht die Numpad-Operatoren.
 Hotkey hotkeyFromKeyCode (int juceKeyCode, bool ctrl, bool alt, bool shift, bool win);

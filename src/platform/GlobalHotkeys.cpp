@@ -11,18 +11,9 @@ namespace
     // statisch erreichbar sein. MicVST hat genau eine (PluginListView besitzt sie).
     GlobalHotkeys* hookOwner = nullptr;
 
-    // Welche Modifier sind JETZT gedrueckt? Als Win32-Bits, damit sie direkt mit
-    // Hotkey::mods vergleichbar sind.
-    int heldModifiers()
-    {
-        int mods = 0;
-        if (GetAsyncKeyState (VK_CONTROL) & 0x8000) mods |= 0x0002;   // MOD_CONTROL
-        if (GetAsyncKeyState (VK_MENU)    & 0x8000) mods |= 0x0001;   // MOD_ALT
-        if (GetAsyncKeyState (VK_SHIFT)   & 0x8000) mods |= 0x0004;   // MOD_SHIFT
-        if ((GetAsyncKeyState (VK_LWIN) & 0x8000) || (GetAsyncKeyState (VK_RWIN) & 0x8000))
-            mods |= 0x0008;                                           // MOD_WIN
-        return mods;
-    }
+    constexpr int modAltBit = 0x0001, modCtrlBit = 0x0002, modShiftBit = 0x0004, modWinBit = 0x0008;
+
+    bool isKeyDownNow (int vk) { return (GetAsyncKeyState (vk) & 0x8000) != 0; }
 
     LRESULT CALLBACK lowLevelKeyboardProc (int code, WPARAM wParam, LPARAM lParam)
     {
@@ -43,6 +34,32 @@ namespace
     }
 }
 #endif
+
+int pressedHotkeyVk()
+{
+#if JUCE_WINDOWS
+    // Nur die als Hotkey tauglichen Codes abfragen, nicht blind alle 256: so kann kein
+    // Fremdzustand (Maustasten, Sondertasten) als Treffer durchgehen.
+    for (int vk = 0x08; vk <= 0xFE; ++vk)
+        if (isAllowedHotkeyVk (vk) && isKeyDownNow (vk))
+            return vk;
+#endif
+    return 0;
+}
+
+int heldHotkeyModifiers()
+{
+#if JUCE_WINDOWS
+    int mods = 0;
+    if (isKeyDownNow (VK_CONTROL)) mods |= modCtrlBit;
+    if (isKeyDownNow (VK_MENU))    mods |= modAltBit;
+    if (isKeyDownNow (VK_SHIFT))   mods |= modShiftBit;
+    if (isKeyDownNow (VK_LWIN) || isKeyDownNow (VK_RWIN)) mods |= modWinBit;
+    return mods;
+#else
+    return 0;
+#endif
+}
 
 GlobalHotkeys::GlobalHotkeys() = default;
 
@@ -124,7 +141,7 @@ void GlobalHotkeys::handleHookedKey (int vk, bool isDown)
         return;
 
     // Modifier muessen EXAKT passen: F9 darf nicht auf Ctrl+F9 reagieren und umgekehrt.
-    const int mods = heldModifiers();
+    const int mods = heldHotkeyModifiers();
 
     for (int i = 0; i < current.size(); ++i)
     {
