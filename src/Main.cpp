@@ -1,5 +1,6 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "audio/AudioEngine.h"
+#include "audio/Vst3ClassScan.h"
 #include "state/Persistence.h"
 #include "state/AutostartRegistry.h"
 #include "ui/MainComponent.h"
@@ -18,6 +19,8 @@
 // Enumeration mit SEH-Guard: Crasht eine Plugin-Klasse (WaveShell enthält hunderte),
 // stirbt nicht mehr der ganze Prozess — die bis dahin gefundenen Typen bleiben
 // nutzbar. Rückgabe 0 = sauber durchgelaufen, sonst der Exception-Code (NTSTATUS).
+// In __try-Funktionen dürfen keine lokalen Objekte mit Destruktor liegen, daher nehmen
+// beide Guards ihre Ausgabe per Referenz entgegen und rufen nur eine Funktion auf.
 static unsigned int findTypesWithSehGuard (juce::VST3PluginFormat& format,
                                            juce::OwnedArray<juce::PluginDescription>& types,
                                            const juce::String& path)
@@ -29,6 +32,23 @@ static unsigned int findTypesWithSehGuard (juce::VST3PluginFormat& format,
     }
     __except (1 /* EXCEPTION_EXECUTE_HANDLER */)
     {
+        return (unsigned int) _exception_code();
+    }
+}
+
+static unsigned int enumerateWithSehGuard (const juce::File& path,
+                                           juce::Array<juce::PluginDescription>& out,
+                                           juce::String& error,
+                                           bool& okOut)
+{
+    __try
+    {
+        okOut = enumerateVst3Classes (path, out, error);
+        return 0;
+    }
+    __except (1 /* EXCEPTION_EXECUTE_HANDLER */)
+    {
+        okOut = false;
         return (unsigned int) _exception_code();
     }
 }
@@ -67,14 +87,41 @@ public:
         }
         if (pluginPath.isEmpty() || outPath.isEmpty()) return 2;
 
-        juce::VST3PluginFormat format;
         juce::OwnedArray<juce::PluginDescription> types;
+        unsigned int crashCode = 0;
+
        #if JUCE_WINDOWS
-        const unsigned int crashCode = findTypesWithSehGuard (format, types, pluginPath);
-       #else
-        const unsigned int crashCode = 0;
-        format.findAllTypesForFile (types, pluginPath);
+        // Schneller Weg: Klassen nur über die Factory-Metadaten auflisten, ohne jede
+        // einzelne zu instanziieren (siehe Vst3ClassScan.h). Bei Shell-Plugins ist das der
+        // Unterschied zwischen ~1 s und Minuten — WaveShell1-VST3 17.1 (347 Klassen)
+        // brauchte über JUCE 178 s und lief damit in den Scan-Timeout.
+        {
+            juce::Array<juce::PluginDescription> infoOnly;
+            juce::String error;
+            bool ok = false;
+            crashCode = enumerateWithSehGuard (juce::File (pluginPath), infoOnly, error, ok);
+
+            // Nicht auf ok prüfen, sondern auf das Ergebnis: crasht erst das Herunterfahren
+            // der DLL, stehen die Klassen längst in infoOnly und sind voll brauchbar.
+            juce::ignoreUnused (ok);
+            for (auto& d : infoOnly)
+                types.add (new juce::PluginDescription (d));
+        }
        #endif
+
+        // Fallback auf JUCE, wenn der schnelle Weg nichts geliefert hat: deckt Bundles mit
+        // moduleinfo.json, ungewohnte Layouts und alles ab, was unser schlanker Loader
+        // nicht kann. Ein Crash im schnellen Weg wird dabei bewusst NICHT wiederholt.
+        juce::VST3PluginFormat format;
+        if (types.isEmpty() && crashCode == 0)
+        {
+           #if JUCE_WINDOWS
+            crashCode = findTypesWithSehGuard (format, types, pluginPath);
+           #else
+            format.findAllTypesForFile (types, pluginPath);
+           #endif
+        }
+
         if (crashCode == 0 && types.isEmpty()) return 1;
 
         juce::XmlElement root ("MicVSTScanResult");

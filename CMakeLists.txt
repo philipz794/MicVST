@@ -27,6 +27,7 @@ add_library(MicVSTCore STATIC
     src/audio/Metering.cpp
     src/audio/GraphConnections.cpp
     src/audio/ScanCoordinator.cpp
+    src/audio/Vst3ClassScan.cpp
     src/state/Persistence.cpp
     src/state/PluginScanCache.cpp
     src/ui/PluginSearch.cpp
