@@ -207,13 +207,55 @@ struct HotkeyTest : juce::UnitTest
             expect (! hotkeyFromKeyCode (vkF5 | ext, false, false, false, false).isSet());
         }
 
+        beginTest ("numpad keys are accepted, including the operators");
+        {
+            constexpr int vkNum0 = 0x60, vkNum5 = 0x65, vkMultiply = 0x6A, vkAdd = 0x6B,
+                          vkSeparator = 0x6C, vkSubtract = 0x6D, vkDecimal = 0x6E, vkDivide = 0x6F;
+
+            auto plus = hotkeyFromKeyCode (vkAdd | ext, true, false, false, false);
+            expect (plus.isSet());
+            expectEquals (plus.key, vkAdd);
+            expectEquals (plus.toDisplayString(), juce::String ("Ctrl+Num+"));
+
+            expectEquals (hotkeyFromKeyCode (vkSubtract | ext, true, false, false, false)
+                              .toDisplayString(), juce::String ("Ctrl+Num-"));
+            expectEquals (hotkeyFromKeyCode (vkMultiply | ext, true, false, false, false)
+                              .toDisplayString(), juce::String ("Ctrl+Num*"));
+            expectEquals (hotkeyFromKeyCode (vkDivide | ext, true, false, false, false)
+                              .toDisplayString(), juce::String ("Ctrl+Num/"));
+            expectEquals (hotkeyFromKeyCode (vkSeparator | ext, true, false, false, false)
+                              .toDisplayString(), juce::String ("Ctrl+Num,"));
+            expectEquals (hotkeyFromKeyCode (vkDecimal | ext, true, false, false, false)
+                              .toDisplayString(), juce::String ("Ctrl+Num."));
+            expectEquals (hotkeyFromKeyCode (vkNum0 | ext, true, false, false, false)
+                              .toDisplayString(), juce::String ("Ctrl+Num0"));
+            expectEquals (hotkeyFromKeyCode (vkNum5 | ext, false, true, false, false)
+                              .toDisplayString(), juce::String ("Alt+Num5"));
+        }
+
         beginTest ("unsupported keys are rejected");
         {
-            constexpr int vkReturn = 0x0D, vkLeft = 0x25, vkF13 = 0x7C;
+            constexpr int vkReturn = 0x0D, vkLeft = 0x25, vkF13 = 0x7C, vkDelete = 0x2E,
+                          vkOemNecEqual = 0x92;
             expect (! hotkeyFromKeyCode (vkReturn | ext, true, false, false, false).isSet());
             expect (! hotkeyFromKeyCode (vkLeft   | ext, true, false, false, false).isSet());
             expect (! hotkeyFromKeyCode (vkF13    | ext, true, false, false, false).isSet());
+            // KeyPress::numberPadDelete sitzt auf dem GETEILTEN VK_DELETE und liesse sich
+            // nicht von der normalen Entf-Taste unterscheiden.
+            expect (! hotkeyFromKeyCode (vkDelete | ext, true, false, false, false).isSet());
+            // KeyPress::numberPadEquals ist eine NEC-Exotik ausserhalb des Blocks.
+            expect (! hotkeyFromKeyCode (vkOemNecEqual | ext, true, false, false, false).isSet());
+        }
+
+        beginTest ("punctuation on the MAIN keyboard is rejected, not silently mismapped");
+        {
+            // JUCE liefert hier das ZEICHEN, und ein Zeichen ist kein Virtual-Key: '+' ist
+            // 0x2B, als VK waere das VK_EXECUTE. Wuerden wir das durchlassen, registrierte
+            // MicVST eine voellig andere Taste als die gedrueckte.
             expect (! hotkeyFromKeyCode ('+', true, false, false, false).isSet());
+            expect (! hotkeyFromKeyCode ('-', true, false, false, false).isSet());
+            expect (! hotkeyFromKeyCode ('.', true, false, false, false).isSet());
+            expect (! hotkeyFromKeyCode ('#', true, false, false, false).isSet());
         }
 
         beginTest ("all four modifiers survive the round trip");

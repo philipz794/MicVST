@@ -30,7 +30,18 @@ struct Hotkey
 // Liefert einen UNGESETZTEN Hotkey, wenn
 //   - kein Modifier gedrückt ist: RegisterHotKey auf eine nackte Taste würde sie systemweit
 //     abfangen, der Nutzer könnte dann z. B. kein "k" mehr tippen;
-//   - die Taste nicht unterstützt wird. Erlaubt sind A-Z, 0-9 und F1-F12. Alles andere
-//     (Pfeile, Enter, Tab, ...) wäre als globaler Hotkey entweder unbrauchbar oder würde
-//     die Bedienung anderer Programme sabotieren.
+//   - die Taste nicht unterstützt wird. Erlaubt sind A-Z, 0-9, F1-F12 und der komplette
+//     Ziffernblock (Num0-Num9 sowie + - * / , .). Alles andere (Pfeile, Enter, Tab, ...)
+//     wäre als globaler Hotkey entweder unbrauchbar oder würde die Bedienung anderer
+//     Programme sabotieren.
+//
+// Bewusst NICHT erlaubt sind + - . , usw. der HAUPTTASTATUR. JUCE liefert für solche Tasten
+// das Zeichen selbst, und ein Zeichen ist kein Virtual-Key: '+' ist 0x2B, was als VK
+// VK_EXECUTE bedeutet -- wir würden also stillschweigend eine völlig andere Taste
+// registrieren. Die richtigen Codes (VK_OEM_PLUS & Co.) hängen zudem vom Tastaturlayout ab.
+// Der Ziffernblock hat dieses Problem nicht: seine VKs sind layoutunabhängig eindeutig.
+//
+// NumLock-Hinweis: Die Ziffern des Blocks melden bei AUSgeschaltetem NumLock andere Codes
+// (VK_END, VK_INSERT, ...), ein Hotkey auf Num5 greift dann nicht. Die Operatortasten
+// + - * / sind davon nicht betroffen und funktionieren immer.
 Hotkey hotkeyFromKeyCode (int juceKeyCode, bool ctrl, bool alt, bool shift, bool win);
