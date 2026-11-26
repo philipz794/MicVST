@@ -62,6 +62,9 @@ void DevicePanel::refresh()
 
     if (auto* type = dm.getCurrentDeviceTypeObject())
     {
+        if (type->getDeviceNames (true).isEmpty() && type->getDeviceNames (false).isEmpty())
+            type->scanForDevices();
+
         const auto ins = type->getDeviceNames (true);
         for (int i = 0; i < ins.size(); ++i) inBox.addItem (ins[i], i + 1);
         const int si = ins.indexOf (setup.inputDeviceName);
@@ -162,9 +165,7 @@ void DevicePanel::apply()
         if (juce::isPositiveAndBelow (idx, sizes.size())) buf = sizes[idx];
     }
     engine.setPreferredBufferSize (buf);
-    auto* curDev = dm.getCurrentAudioDevice();
-    const int effective = buf > 0 ? buf : (curDev != nullptr ? curDev->getDefaultBufferSize() : 0);
-    engine.setDeviceConfig (input, output, 0.0, effective);
+    engine.setDeviceConfig (input, output, 0.0, buf);
 }
 
 void DevicePanel::resized()

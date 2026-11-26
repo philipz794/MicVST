@@ -44,8 +44,13 @@ juce::String AudioEngine::detectCableOutput()
         "Virtual Audio Cable"   // VAC ("Line 1 (Virtual Audio Cable)")
     };
 
-    deviceManager.setCurrentAudioDeviceType (deviceManager.preferredTypeName(), true);
-    if (auto* type = deviceManager.getCurrentDeviceTypeObject())
+    auto* type = deviceManager.getCurrentDeviceTypeObject();
+    if (type == nullptr)
+    {
+        const auto& types = deviceManager.getAvailableDeviceTypes();
+        if (! types.isEmpty()) type = types.getFirst();
+    }
+    if (type != nullptr)
     {
         type->scanForDevices();
         auto outs = type->getDeviceNames (false /* output */);
@@ -62,36 +67,17 @@ juce::String AudioEngine::initialise (const juce::String& inputDeviceName,
 {
     deviceManager.removeAudioCallback (this);   // idempotent: doppelte Registrierung vermeiden
     deviceManager.closeAudioDevice();
-    deviceManager.setCurrentAudioDeviceType (deviceManager.preferredTypeName(), true);
-
-    juce::AudioDeviceManager::AudioDeviceSetup setup;
-    deviceManager.getAudioDeviceSetup (setup);
-    // Namen VERBATIM übernehmen — auch leer. Ein leerer Output-Name bedeutet bewusst
-    // "kein Host-Output" ("none"); der Input-WASAPI-Callback treibt die Engine dann allein.
-    // Würden wir leer überspringen, bliebe das alte Default-Gerät stehen und "none"
-    // ließe sich nicht speichern.
-    setup.inputDeviceName  = inputDeviceName;
-    setup.outputDeviceName = outputDeviceName;
-    if (preferredBufferSize > 0)
-        setup.bufferSize = preferredBufferSize;   // 0 = Auto: Geräte-Default nicht anfassen
-    // Kanäle EXPLIZIT aktivieren. Auf useDefault* darf man sich nicht verlassen:
-    // ohne deviceManager.initialise(numIn,numOut,...) ist numInputChansNeeded=0,
-    // wodurch die "Default"-Input-Kanäle auf [0,0) = KEINE gesetzt würden.
-    setup.useDefaultInputChannels  = false;
-    setup.useDefaultOutputChannels = false;
-    setup.inputChannels.clear();
-    setup.inputChannels.setRange (0, 2, true);    // bis zu 2 Mic-Kanäle (mono nutzt nur ch0)
-    setup.outputChannels.clear();
-    setup.outputChannels.setRange (0, 2, true);
-    setup.sampleRate = 48000.0;   // bevorzugt; WASAPI shared kann die Mix-Rate des Geräts erzwingen
 
     // Fehler NICHT früh zurückgeben: Graph/Chain müssen immer existieren,
     // auch wenn (noch) kein Device offen ist (z. B. Gerät noch nicht da / Reconnect).
-    const juce::String err = deviceManager.setAudioDeviceSetup (setup, true);
+    const juce::String err = MicVSTDeviceManager::openSetupWithFallback (
+        deviceManager, deviceManager.orderedTypeNames(),
+        inputDeviceName, outputDeviceName, 48000.0, preferredBufferSize);
 
     if (auto* d = deviceManager.getCurrentAudioDevice())
-        juce::Logger::writeToLog ("Setup: in=" + setup.inputDeviceName
-            + " out=" + setup.outputDeviceName
+        juce::Logger::writeToLog ("Setup: type=" + d->getTypeName()
+            + " in=" + inputDeviceName
+            + " out=" + outputDeviceName
             + " sr=" + juce::String (d->getCurrentSampleRate(), 0)
             + " buf=" + juce::String (d->getCurrentBufferSizeSamples()));
     else
@@ -118,18 +104,11 @@ juce::String AudioEngine::initialise (const juce::String& inputDeviceName,
 void AudioEngine::setDeviceConfig (const juce::String& input, const juce::String& output,
                                   double sampleRate, int bufferSize)
 {
-    auto setup = deviceManager.getAudioDeviceSetup();
-    setup.inputDeviceName  = input;
-    setup.outputDeviceName = output;
-    if (sampleRate > 0.0) setup.sampleRate = sampleRate;
-    if (bufferSize > 0)   setup.bufferSize = bufferSize;
-    // Kanäle EXPLIZIT (wie in initialise) — sonst droht 0 aktive Input-Kanäle.
-    setup.useDefaultInputChannels  = false;
-    setup.useDefaultOutputChannels = false;
-    setup.inputChannels.clear();  setup.inputChannels.setRange (0, 2, true);
-    setup.outputChannels.clear(); setup.outputChannels.setRange (0, 2, true);
-
-    deviceManager.setAudioDeviceSetup (setup, true);
+    const juce::String err = MicVSTDeviceManager::openSetupWithFallback (
+        deviceManager, deviceManager.orderedTypeNames(),
+        input, output, sampleRate, bufferSize);
+    if (err.isNotEmpty())
+        juce::Logger::writeToLog ("Device-Config fehlgeschlagen: " + err);
     rebuildGraph();   // IO-Knoten-Kanalzahl kann sich geändert haben -> neu verdrahten
 }
 
@@ -413,11 +392,14 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
         + " | outCh aktiv=" + juce::String (device->getActiveOutputChannels().countNumberOfSetBits())
         + " | sr=" + juce::String (device->getCurrentSampleRate(), 0)
         + " | buf=" + juce::String (device->getCurrentBufferSizeSamples()));
+    playHead.sampleRate.store (device->getCurrentSampleRate(), std::memory_order_relaxed);
     player.audioDeviceAboutToStart (device);
+    deviceActive.store (true, std::memory_order_release);
 }
 
 void AudioEngine::audioDeviceStopped()
 {
+    deviceActive.store (false, std::memory_order_release);
     player.audioDeviceStopped();
 }
 
@@ -428,6 +410,15 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
                                                     int numSamples,
                                                     const juce::AudioIODeviceCallbackContext& context)
 {
+    if (! deviceActive.load (std::memory_order_acquire) || numSamples <= 0)
+    {
+        if (numSamples > 0)
+            for (int ch = 0; ch < numOutputChannels; ++ch)
+                if (outputChannelData[ch] != nullptr)
+                    juce::FloatVectorOperations::clear (outputChannelData[ch], numSamples);
+        return;
+    }
+
     playHead.samples.fetch_add (numSamples, std::memory_order_relaxed);   // Transport voranschieben
 
     if (numInputChannels > 0)

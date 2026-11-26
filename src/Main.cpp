@@ -179,7 +179,6 @@ public:
 
             // Input: System-Standardmikrofon, sonst erstes verfügbares Eingangsgerät.
             auto& dm = engine->getDeviceManager();
-            dm.setCurrentAudioDeviceType (dm.preferredTypeName(), true);
             if (auto* type = dm.getCurrentDeviceTypeObject())
             {
                 type->scanForDevices();
