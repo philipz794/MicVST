@@ -91,16 +91,24 @@ target_link_libraries(MicVST PRIVATE
 # --- Unit tests (console app, JUCE UnitTestRunner) ---
 juce_add_console_app(MicVSTTests PRODUCT_NAME "MicVSTTests")
 target_sources(MicVSTTests PRIVATE
+    src/audio/AudioEngine.cpp
+    src/audio/PluginChain.cpp
     tests/TestMain.cpp
     tests/ScanTests.cpp
     tests/PickerTests.cpp
+    tests/DeviceTests.cpp
 )
 target_compile_definitions(MicVSTTests PRIVATE
+    JUCE_WASAPI=1
+    JUCE_DIRECTSOUND=0
+    JUCE_ASIO=0
     JUCE_PLUGINHOST_VST3=1
 )
 target_link_libraries(MicVSTTests PRIVATE
     MicVSTCore
+    juce::juce_audio_devices
     juce::juce_audio_processors
+    juce::juce_audio_utils
     juce::juce_core
     juce::juce_recommended_config_flags
     juce::juce_recommended_warning_flags

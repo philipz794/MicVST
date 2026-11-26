@@ -7,6 +7,7 @@
 #include "audio/MicVSTDeviceManager.h"
 #include "audio/ScanCoordinator.h"
 #include "state/Persistence.h"
+#include <atomic>
 
 // Besitzt AudioDeviceManager + AudioProcessorGraph. Der Graph läuft über einen
 // internen AudioProcessorPlayer; AudioEngine bleibt der Device-Callback und
@@ -22,7 +23,7 @@ public:
                              const juce::String& outputDeviceName);
 
     // Laufzeit-Geräteumschaltung (vom DevicePanel): setzt Geräte/Samplerate/Buffer neu,
-    // OHNE Graph + Plugin-Kette neu aufzubauen. sampleRate<=0 / bufferSize<=0 = unverändert.
+    // OHNE Graph + Plugin-Kette neu aufzubauen. sampleRate<=0 = Auto; bufferSize<=0 = Auto (Geräte-Default).
     void setDeviceConfig (const juce::String& input, const juce::String& output,
                           double sampleRate, int bufferSize);
 
@@ -137,6 +138,7 @@ private:
 
     std::unique_ptr<ScanCoordinator> scanner;      // != nullptr solange ein Scan läuft
     bool rescanQueued = false;   // merkt einen während des Scans angeforderten Folgescan vor
+    std::atomic<bool> deviceActive { false };      // schützt Audio-Callback vor verspäteten JUCE-WASAPI-Aufrufen nach stop()
     juce::Array<SkippedPlugin> skippedPlugins;     // persistiert im Cache
     juce::Array<PluginEntryState> pendingPlugins;  // Ketten-Restore wartet auf Scan-Ende
     juce::StringArray scanRoots() const;           // JUCE-Default-VST3-Orte + Custom-Ordner
